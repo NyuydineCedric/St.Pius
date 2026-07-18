@@ -22,3 +22,18 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Electron build output
+release/
+staging/
+
+# Compiled Java — only .java source should be tracked
+backend/target/
+backend/src/main/java/**/*.class
+backend/src/main/java/**/*.ser
+
+# Frontend build copied into the backend for packaging
+backend/src/main/java/public/
+
+# Runtime data — not source code
+*.ser

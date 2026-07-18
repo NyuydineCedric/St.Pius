@@ -1,0 +1,2 @@
+JAVA_VERSION="26"
+MODULES="java.base jdk.httpserver"

@@ -1,14 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BookOpen, Menu, X } from "lucide-react";
 import { Link } from "react-router-dom";
+import logo from "../assets/logo.jpg";
 
 const NavBar = ({ currentSection, onSectionChange }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(()=>{
+    const handleScroll=()=>{
+        if(window.scrollY>60){
+            setScrolled(true);
+        }else{
+            setScrolled(false)
+        }
+    };
+    window.addEventListener("scroll", handleScroll);
+    return() => window.removeEventListener("scroll", handleScroll)
+
+  },[])
 
   const NavLink = [
     { name: "Home", section: "home" },
     { name: "About", section: "about" },
-    { name: "Feature", section: "feature" },
+    { name: "Feature", section: "features" },
     { name: "How It Works", section: "how-it-works" },
     { name: "CTA", section: "cta" },
   ];
@@ -21,22 +36,27 @@ const NavBar = ({ currentSection, onSectionChange }) => {
     }
     setMobileOpen(false);
   };
+
   return (
-    <nav className="fixed top-0 right-0 left-0 backdrop-blur-xl z-50 border-b border-[rgba(37,99,235,0.05)]">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+    <nav className={`fixed top-0 right-0 left-0 backdrop-blur-xl z-50 transition-all duration-500 ${scrolled?"bg-[#e8eef9] shadow-md":"bg-transparent"}`}>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
           <div
             onClick={() => scrollToSection("hero")}
             className="cursor-pointer flex items-center gap-2"
           >
-            <BookOpen className="w-6 h-6 text-[#2563eb]" />
+            <img
+              src={logo}
+              alt="Logo"
+              style={{ width: "30px", borderRadius: "50%" }}
+            />
             <p className="text-[#0F172A] text-xl font-bold">
               Report<span className="text-[#2563EB]">Card</span>
             </p>
           </div>
           <div className="hidden md:flex items-center font-semibold space-x-6">
             {NavLink.map((link) => (
-              <button
+              <p
                 key={link.name}
                 onClick={() => scrollToSection(link.section)}
                 className={`text-sm cursor-pointer transition ${
@@ -46,7 +66,7 @@ const NavBar = ({ currentSection, onSectionChange }) => {
                 }`}
               >
                 {link.name}
-              </button>
+              </p>
             ))}
           </div>
           <div className="hidden md:block">
@@ -67,29 +87,29 @@ const NavBar = ({ currentSection, onSectionChange }) => {
               <Menu className="w-6 h-6" />
             )}
           </button>
-        </div>  
-
-          {mobileOpen && (
-            <div className="md:hidden py-2">
-              {NavLink.map((link) => (
-                <button
-                  key={link.name}
-                  onClick={() => scrollToSection(link.section)}
-                  className="block cursor-pointer w-full text-left py-3 text-black hover:text-[#1D4ED8] transition"
-                >
-                  {link.name}
-                </button>
-              ))}
-              <Link
-                to="/login"
-                onClick={()=> setMobileOpen(false)}
-                className="block w-full text-center bg-[#2563EB] text-white font-semibold px-8 py-2 rounded-[4px] hover:bg-[#1D4ED8] transition  transform scale-105"
-              >
-                Login
-              </Link>
-            </div>
-          )}
         </div>
+
+        {mobileOpen && (
+          <div className="md:hidden py-2">
+            {NavLink.map((link) => (
+              <p
+                key={link.name}
+                onClick={() => scrollToSection(link.section)}
+                className="block cursor-pointer w-full text-left py-3 text-black hover:text-[#1D4ED8] transition"
+              >
+                {link.name}
+              </p>
+            ))}
+            <Link
+              to="/login"
+              onClick={() => setMobileOpen(false)}
+              className="block w-full text-center bg-[#2563EB] text-white font-semibold px-8 py-2 rounded-[4px] hover:bg-[#1D4ED8] transition  transform scale-105"
+            >
+              Login
+            </Link>
+          </div>
+        )}
+      </div>
     </nav>
   );
 };

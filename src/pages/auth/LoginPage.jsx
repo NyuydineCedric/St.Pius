@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Mail, Eye, EyeOff, Lock, TriangleAlert } from "lucide-react";
+import {
+  Mail,
+  Eye,
+  EyeOff,
+  Lock,
+  TriangleAlert,
+  ArrowLeft,
+} from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
 
 const LoginPage = () => {
-  const Navigate = useNavigate();
+  const navigate = useNavigate();
+  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -13,22 +22,31 @@ const LoginPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
     if (!email || !password) {
-      setError("please fill in all the fields");
+      setError("Please fill in all the fields");
       return;
     }
+
     setLoading(true);
     try {
-      await (email, password);
-      Navigate("/dashboard");
+      const user = await login(email, password);
+      // Redirect based on role
+      if (user.role === "admin") {
+        navigate("/admin/dashboard");
+      } else if (user.role === "teacher") {
+        navigate("/teacher/dashboard");
+      } else {
+        navigate("/dashboard");
+      }
     } catch (err) {
-      setError(err.response?.data?.error || "Login failed. Please try again");
+      setError(err.message || "Login failed. Please try again");
     } finally {
       setLoading(false);
     }
   };
   return (
-    <div className="min-h-screen items-center justify-center flex px-4 py-8 relative  overflow:hidden">
+    <div className="min-h-screen items-center bg-[#e8eef9]  justify-center flex px-4 py-8 relative  overflow:hidden">
       <div className="absolute inset-0">
         <div
           className="absolute inset-0"
@@ -40,6 +58,9 @@ const LoginPage = () => {
         ></div>
       </div>
       <div className="border absolute bg-white md:w-88 border-white p-8 rounded-xs shadow-xl">
+        <div className="cursor-pointer" onClick={() => navigate(-1)}>
+          <ArrowLeft className="w-5 h-5 text-[#64748B] hover:text-[#2563EB] transition" />
+        </div>
         <div className="text-center mb-2">
           <h2 className="text-[25px] font-bold text-[#1b2336] mb-1">
             Welcome Back!
@@ -119,11 +140,14 @@ const LoginPage = () => {
           </button>
           <div className="flex items-center">
             <span className="h-[1px] border border-[#E2E8F0] w-[25%]"></span>
-            <span className="text-sm text-[#64748B] mr-5 ml-5">or continue with</span>
+            <span className="text-sm text-[#64748B] mr-5 ml-5">
+              or continue with
+            </span>
             <span className="h-[1px] border border-[#E2E8F0] w-[25%]"></span>
           </div>
 
           <button
+            type="button"
             className="w-full py-2 rounded-xs cursor-pointer text-black border border-[#E2E8F0] font-semibold hover:bg-gray-200 transition transform  flex items-center justify-center gap-2"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
