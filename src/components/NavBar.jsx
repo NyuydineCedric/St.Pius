@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { BookOpen, Menu, X } from "lucide-react";
 import { Link } from "react-router-dom";
+import logo from "../assets/logo.jpg";
 
 const NavBar = ({ currentSection, onSectionChange }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -44,7 +45,11 @@ const NavBar = ({ currentSection, onSectionChange }) => {
             onClick={() => scrollToSection("hero")}
             className="cursor-pointer flex items-center gap-2"
           >
-            <BookOpen className="w-6 h-6 text-[#2563eb]" />
+            <img
+              src={logo}
+              alt="Logo"
+              style={{ width: "30px", borderRadius: "50%" }}
+            />
             <p className="text-[#0F172A] text-xl font-bold">
               Report<span className="text-[#2563EB]">Card</span>
             </p>

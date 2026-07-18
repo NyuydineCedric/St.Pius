@@ -40,10 +40,21 @@ function resolveJavaBinary() {
 
 function startJavaBackend() {
   const javaBin = resolveJavaBinary();
+
+  console.log("DEBUG USER_DATA_DIR:", USER_DATA_DIR);
+  console.log("DEBUG PUBLIC_DIR:", PUBLIC_DIR);
+  console.log("DEBUG BACKEND_DIR:", BACKEND_DIR);
+  console.log("DEBUG javaBin:", javaBin);
+
+  // No "shell: true" here — critical. With a shell, arguments are joined
+  // into one string without escaping, so any path containing a space
+  // (e.g. "C:\Users\Nyuydine Cedric\...") silently splits into multiple
+  // arguments. Passing the args array directly to spawn keeps each
+  // argument intact regardless of spaces.
   javaProcess = spawn(
     javaBin,
     ["com.reportcard.Main", USER_DATA_DIR, PUBLIC_DIR],
-    { cwd: BACKEND_DIR, shell: true },
+    { cwd: BACKEND_DIR },
   );
 
   javaProcess.stdout.on("data", (data) => {
@@ -85,6 +96,7 @@ async function createWindow() {
     height: 800,
     minWidth: 1080,
     minHeight: 700,
+    icon: path.join(__dirname, "..", "build", "icon.ico"),
     title: "Report Card Management System",
     webPreferences: {
       contextIsolation: true,

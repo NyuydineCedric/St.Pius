@@ -20,6 +20,7 @@ import Activities from "./pages/admin/Activities";
 import Settings from "./pages/admin/Settings";
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
 import TeacherMarksEntry from "./pages/teacher/TeacherMarksEntry";
+import MyStudents from "./pages/teacher/MyStudents";
 
 export default function App() {
   return (
@@ -37,7 +38,7 @@ export default function App() {
         {/* Admin Routes */}
         <Route
           element={
-            <ProtectedRoute allowedRoles={['admin']}>
+            <ProtectedRoute allowedRoles={["admin"]}>
               <Layout />
             </ProtectedRoute>
           }
@@ -55,7 +56,7 @@ export default function App() {
         {/* Teacher Routes */}
         <Route
           element={
-            <ProtectedRoute allowedRoles={['teacher']}>
+            <ProtectedRoute allowedRoles={["teacher"]}>
               <Layout />
             </ProtectedRoute>
           }
@@ -63,35 +64,47 @@ export default function App() {
           <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
           <Route path="/teacher/marks" element={<TeacherMarksEntry />} />
           <Route path="/teacher/report-cards" element={<ReportCards />} />
-          <Route path="/teacher/students" element={<StudentEntry />} />
+          <Route path="/teacher/students" element={<MyStudents />} />
         </Route>
 
         {/* Redirect /dashboard based on role */}
-        <Route path="/dashboard" element={
-          <ProtectedRoute>
-            {({ user }) => {
-              if (user?.role === 'admin') return <Navigate to="/admin/dashboard" replace />;
-              if (user?.role === 'teacher') return <Navigate to="/teacher/dashboard" replace />;
-              return <Navigate to="/login" replace />;
-            }}
-          </ProtectedRoute>
-        } />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              {({ user }) => {
+                if (user?.role === "admin")
+                  return <Navigate to="/admin/dashboard" replace />;
+                if (user?.role === "teacher")
+                  return <Navigate to="/teacher/dashboard" replace />;
+                return <Navigate to="/login" replace />;
+              }}
+            </ProtectedRoute>
+          }
+        />
 
         {/* Unauthorized page */}
-        <Route path="/unauthorized" element={
-          <div className="min-h-screen flex items-center justify-center bg-[#e8eef9]">
-            <div className="bg-white p-8 rounded-xl shadow-xl text-center">
-              <h1 className="text-2xl font-bold text-red-600 mb-4">Unauthorized Access</h1>
-              <p className="text-gray-600">You don't have permission to view this page.</p>
-              <button 
-                onClick={() => window.history.back()}
-                className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Go Back
-              </button>
+        <Route
+          path="/unauthorized"
+          element={
+            <div className="min-h-screen flex items-center justify-center bg-[#e8eef9]">
+              <div className="bg-white p-8 rounded-xl shadow-xl text-center">
+                <h1 className="text-2xl font-bold text-red-600 mb-4">
+                  Unauthorized Access
+                </h1>
+                <p className="text-gray-600">
+                  You don't have permission to view this page.
+                </p>
+                <button
+                  onClick={() => window.history.back()}
+                  className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Go Back
+                </button>
+              </div>
             </div>
-          </div>
-        } />
+          }
+        />
       </Routes>
     </AuthProvider>
   );

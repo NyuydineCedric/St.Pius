@@ -19,7 +19,8 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "recharts": "^3.9.1",
-    "tailwindcss": "^4.3.1"
+    "tailwindcss": "^4.3.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -37,16 +38,26 @@
   "build": {
     "appId": "com.reportcard.app",
     "productName": "Report Card Management System",
-    "files": ["dist/**/*", "electron/**/*"],
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
     "directories": {
       "output": "release"
     },
     "extraResources": [
-      { "from": "staging/backend", "to": "backend" },
-      { "from": "jre", "to": "jre" }
+      {
+        "from": "staging/backend",
+        "to": "backend"
+      },
+      {
+        "from": "jre",
+        "to": "jre"
+      }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     }
   }
 }

@@ -7,34 +7,86 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.*;
 
 public class Main {
-    private static final File DATA_FILE = new File("backend-data.ser");
+    // Non-final so main() can point it at the per-user data directory
+    // passed in via args[0]. Falls back to the current working directory
+    // if no args are given (e.g. running Main.java directly for testing).
+    private static File DATA_FILE = new File("backend-data.ser");
+
+    // Cross-origin config — only relevant for the web deployment (Render +
+    // Vercel), where frontend and backend live on different domains. In
+    // the Electron desktop build, requests are same-origin (both served
+    // from http://localhost:8080), so these headers are simply ignored.
+    private static final String ALLOWED_ORIGIN = System.getenv().getOrDefault("ALLOWED_ORIGIN", "*");
+
+    private static HttpHandler withCors(HttpHandler handler) {
+        return exchange -> {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+            exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+            handler.handle(exchange);
+        };
+    }
 
     public static void main(String[] args) throws IOException {
+        // args[0] = writable per-user data directory (e.g. Electron's
+        // app.getPath("userData")). When no args are passed (e.g. running
+        // as a plain web service on Render), falls back to the DATA_DIR
+        // env var, then finally the current working directory.
+        // args[1] = static frontend files directory (e.g. dist/ copied into
+        // backend/.../public)
+        File dataDir = args.length > 0
+                ? new File(args[0])
+                : new File(System.getenv().getOrDefault("DATA_DIR", "."));
+        File staticDir = args.length > 1 ? new File(args[1]) : new File("public");
+
+        if (!dataDir.exists()) {
+            dataDir.mkdirs();
+        }
+
+        DATA_FILE = new File(dataDir, "backend-data.ser");
         DataStore.load(DATA_FILE);
 
-        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        // Electron always spawns this process with no PORT env var set, so
+        // the desktop build keeps using 8080 exactly as before. Render sets
+        // its own PORT at runtime, which this now respects.
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 
         server.createContext("/api/health", exchange -> {
             String json = "{\"status\":\"UP\",\"service\":\"report-card-backend\",\"message\":\"Backend is running\"}";
             sendJson(exchange, 200, json);
         });
 
-        server.createContext("/api/students", new StudentsHandler());
-        server.createContext("/api/classes", new ClassesHandler());
-        server.createContext("/api/classes/master", new ClassMasterHandler());
-        server.createContext("/api/roster", new RosterHandler());
-        server.createContext("/api/marks", new MarksHandler());
-        server.createContext("/api/activities", new ActivitiesHandler());
-        server.createContext("/api/teachers", new TeachersHandler());
-        server.createContext("/api/settings", new SettingsHandler());
+        server.createContext("/api/login", withCors(new LoginHandler()));
+        server.createContext("/api/register", withCors(new RegisterHandler()));
+        server.createContext("/api/students", withCors(new StudentsHandler()));
+        server.createContext("/api/classes", withCors(new ClassesHandler()));
+        server.createContext("/api/classes/master", withCors(new ClassMasterHandler()));
+        server.createContext("/api/roster", withCors(new RosterHandler()));
+        server.createContext("/api/marks", withCors(new MarksHandler()));
+        server.createContext("/api/activities", withCors(new ActivitiesHandler()));
+        server.createContext("/api/teachers", withCors(new TeachersHandler()));
+        server.createContext("/api/settings", withCors(new SettingsHandler()));
+
+        // Static frontend files (the built React app). Registered last / at
+        // root so it acts as the catch-all for anything not matched by an
+        // /api/* context above.
+        server.createContext("/", new StaticFileHandler(staticDir));
 
         server.setExecutor(null);
         server.start();
 
-        System.out.println("Report Card backend running on http://localhost:8080");
+        System.out.println("Report Card backend running on port " + port);
+        System.out.println("Data file: " + DATA_FILE.getAbsolutePath());
+        System.out.println("Static dir: " + staticDir.getAbsolutePath());
     }
 
     private static void sendJson(HttpExchange exchange, int code, String json) throws IOException {
@@ -105,6 +157,150 @@ public class Main {
             }
         }
         return qmap;
+    }
+
+    // POST /api/login { "email": "...", "password": "..." }
+    // NOTE: passwords are stored and compared in plaintext (see
+    // DataStore.User / DataStore.addUser). Acceptable for a local,
+    // single-school deployment with no internet exposure, but flagged
+    // here deliberately rather than left as a silent assumption.
+    static class LoginHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> obj = parseJsonObject(body);
+            String email = obj.getOrDefault("email", "").trim();
+            String password = obj.getOrDefault("password", "");
+
+            User user = DataStore.findUserByEmail(email);
+            if (user == null || !user.password.equals(password)) {
+                sendJson(exchange, 401, "{\"error\":\"Invalid email or password\"}");
+                return;
+            }
+            sendJson(exchange, 200, user.toJson());
+        }
+    }
+
+    // POST /api/register { "name": "...", "email": "...", "password": "...",
+    // "role": "admin"|"teacher" }
+    static class RegisterHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> obj = parseJsonObject(body);
+            String name = obj.getOrDefault("name", "").trim();
+            String email = obj.getOrDefault("email", "").trim();
+            String password = obj.getOrDefault("password", "");
+            String role = obj.getOrDefault("role", "teacher").trim();
+
+            if (name.isEmpty() || email.isEmpty() || password.isEmpty()) {
+                sendJson(exchange, 400, "{\"error\":\"Name, email, and password are required\"}");
+                return;
+            }
+            if (!"admin".equals(role) && !"teacher".equals(role)) {
+                role = "teacher";
+            }
+            if (DataStore.findUserByEmail(email) != null) {
+                sendJson(exchange, 409, "{\"error\":\"An account with that email already exists\"}");
+                return;
+            }
+
+            User user = DataStore.addUser(name, email, password, role);
+            DataStore.save(DATA_FILE);
+            sendJson(exchange, 201, user.toJson());
+        }
+    }
+
+    // Serves the built frontend (index.html, /assets/*, favicon, etc.) from
+    // staticDir, with SPA-style fallback to index.html for unknown paths so
+    // client-side routing doesn't 404 on a hard refresh.
+    static class StaticFileHandler implements HttpHandler {
+        private final File root;
+
+        StaticFileHandler(File root) {
+            this.root = root;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            String path = exchange.getRequestURI().getPath();
+            if (path.equals("/") || path.isEmpty()) {
+                path = "/index.html";
+            }
+
+            File rootCanonical = root.getCanonicalFile();
+            File requested = new File(root, path).getCanonicalFile();
+
+            // Prevent path traversal outside the static root.
+            if (!requested.getPath().startsWith(rootCanonical.getPath())) {
+                exchange.sendResponseHeaders(403, -1);
+                return;
+            }
+
+            File file = requested;
+            if (!file.exists() || file.isDirectory()) {
+                // SPA fallback for client-side routes (e.g. /students/5).
+                file = new File(rootCanonical, "index.html");
+            }
+
+            if (!file.exists()) {
+                String msg = "404 Not Found";
+                byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
+                exchange.sendResponseHeaders(404, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+                return;
+            }
+
+            byte[] bytes = Files.readAllBytes(file.toPath());
+            exchange.getResponseHeaders().set("Content-Type", guessContentType(file.getName()));
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+
+        private String guessContentType(String name) {
+            String lower = name.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".html"))
+                return "text/html; charset=UTF-8";
+            if (lower.endsWith(".js") || lower.endsWith(".mjs"))
+                return "application/javascript";
+            if (lower.endsWith(".css"))
+                return "text/css";
+            if (lower.endsWith(".svg"))
+                return "image/svg+xml";
+            if (lower.endsWith(".json"))
+                return "application/json";
+            if (lower.endsWith(".png"))
+                return "image/png";
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+                return "image/jpeg";
+            if (lower.endsWith(".webp"))
+                return "image/webp";
+            if (lower.endsWith(".ico"))
+                return "image/x-icon";
+            if (lower.endsWith(".woff"))
+                return "font/woff";
+            if (lower.endsWith(".woff2"))
+                return "font/woff2";
+            return "application/octet-stream";
+        }
     }
 
     // Handlers
@@ -532,6 +728,34 @@ public class Main {
         }
     }
 
+    // Login/register account. Kept separate from Teacher — a Teacher is a
+    // staff record used for class/subject assignments, while a User is a
+    // login credential that may or may not correspond to a Teacher record.
+    static class User implements Serializable {
+        private static final long serialVersionUID = 1L;
+        String id, name, email, password, role; // role: "admin" | "teacher"
+
+        User(String id, String name, String email, String password, String role) {
+            this.id = id;
+            this.name = name;
+            this.email = email;
+            this.password = password;
+            this.role = role;
+        }
+
+        // Deliberately omits "password" — this is what gets sent back to
+        // the frontend after login/register, never the raw credential.
+        String toJson() {
+            return String.format(Locale.ROOT,
+                    "{\"id\":\"%s\",\"name\":\"%s\",\"email\":\"%s\",\"role\":\"%s\"}",
+                    escape(id), escape(name), escape(email), escape(role));
+        }
+
+        private String escape(String s) {
+            return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
+    }
+
     static class SchoolSettings implements Serializable {
         private static final long serialVersionUID = 1L;
         String schoolName = "SCHOOL";
@@ -568,6 +792,7 @@ public class Main {
         private static final List<ClassInfo> classes = new ArrayList<>();
         private static final List<ActivityEntry> activities = new ArrayList<>();
         private static final List<Teacher> teachers = new ArrayList<>();
+        private static final List<User> users = new ArrayList<>();
         private static SchoolSettings settings = new SchoolSettings();
         private static final Map<String, Map<String, Map<String, Map<String, Double>>>> marks = new HashMap<>();
 
@@ -587,12 +812,14 @@ public class Main {
                     Object mk = m.get("marks");
                     Object ac = m.get("activities");
                     Object tc = m.get("teachers");
+                    Object us = m.get("users");
                     Object st = m.get("settings");
                     students.clear();
                     classes.clear();
                     marks.clear();
                     activities.clear();
                     teachers.clear();
+                    users.clear();
                     if (s instanceof List)
                         students.addAll((List<Student>) s);
                     if (c instanceof List)
@@ -603,6 +830,8 @@ public class Main {
                         activities.addAll((List<ActivityEntry>) ac);
                     if (tc instanceof List)
                         teachers.addAll((List<Teacher>) tc);
+                    if (us instanceof List)
+                        users.addAll((List<User>) us);
                     if (st instanceof SchoolSettings)
                         settings = (SchoolSettings) st;
                     for (String n : Arrays.asList("Lower Sixth", "Upper Sixth")) {
@@ -629,6 +858,7 @@ public class Main {
                 m.put("marks", new HashMap<>(marks));
                 m.put("activities", new ArrayList<>(activities));
                 m.put("teachers", new ArrayList<>(teachers));
+                m.put("users", new ArrayList<>(users));
                 m.put("settings", settings);
                 oos.writeObject(m);
             } catch (Exception ex) {
@@ -779,6 +1009,25 @@ public class Main {
                     c.teacher = "Unassigned";
                 }
             }
+        }
+
+        static synchronized User findUserByEmail(String email) {
+            if (email == null)
+                return null;
+            for (User u : users) {
+                if (u.email.equalsIgnoreCase(email)) {
+                    return u;
+                }
+            }
+            return null;
+        }
+
+        static synchronized User addUser(String name, String email, String password, String role) {
+            String id = String.format("USR-%04d", users.size() + 1);
+            User u = new User(id, name, email, password, role);
+            users.add(u);
+            logActivity("Account", "New " + role + " account registered — " + name);
+            return u;
         }
 
         static synchronized SchoolSettings getSettings() {

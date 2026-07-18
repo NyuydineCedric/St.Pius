@@ -24,6 +24,7 @@ import {
 } from "../../utils/grading";
 import logo from "../../assets/logo.jpg";
 import stamp from "../../assets/stamp.webp";
+import signature from "../../assets/signature.jpg";
 import {
   getSubjectsForStudent,
   getTeacherName,
@@ -147,6 +148,8 @@ function ReportFooter({
   termAverages,
   finalAverage,
   marksScale,
+  isStreamed,
+  gceStatus,
 }) {
   // Class council decision, driven by the student's overall average:
   //  - 15 and above  -> Satisfactory / Satisfaisant
@@ -275,6 +278,43 @@ function ReportFooter({
         </div>
       </div>
 
+      {/* Dual result standard — only relevant once streaming (GCE-style
+          subject choice) applies, i.e. Form 4/5 and Lower/Upper Sixth */}
+      {isStreamed && (
+        <div className="flex flex-col gap-2 rounded-xl border border-slate-300 bg-[#f8fafc] px-3 py-2 sm:flex-row sm:items-center sm:justify-between print:rounded-md print:border print:px-2 print:py-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-500 print:text-[7.5px]">
+              Result (Average)
+            </span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-bold print:text-[8px] ${
+                status === "Pass"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : status === "Trial"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-rose-100 text-rose-600"
+              }`}
+            >
+              {status}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-500 print:text-[7.5px]">
+              Result (GCE Standard — 4+ subjects)
+            </span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-bold print:text-[8px] ${
+                gceStatus === "Pass"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-rose-100 text-rose-600"
+              }`}
+            >
+              {gceStatus} ({papersPassed}/{papersSat})
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* General Conduct */}
       <div className="rounded-xl border border-slate-300 print:rounded-md print:border">
         <div className="border-b border-slate-300 bg-[#1e3a8a] px-2.5 py-1 text-center text-[10px] font-bold uppercase tracking-wide text-white print:px-2 print:py-1 print:text-[8.5px]">
@@ -328,7 +368,7 @@ function ReportFooter({
   );
 }
 
-function RemarkCard({ title, text, showStamp = false }) {
+function RemarkCard({ title, text, showSignature = false, showStamp = false }) {
   return (
     <div className="relative rounded-xl border border-slate-300 bg-white p-2.5 print:rounded-md print:border print:p-2">
       <div className="text-xs font-semibold text-[#1e3a8a] print:text-[10px]">
@@ -342,11 +382,18 @@ function RemarkCard({ title, text, showStamp = false }) {
           <span>Signature</span>
           <span className="h-px flex-1 border-t border-dashed border-slate-300" />
         </div>
+        {showSignature && (
+          <img
+            src={signature}
+            alt="Signature"
+            className="pointer-events-none -mb-1 h-30 w-30 flex-shrink-0 rounded-full object-contain opacity-90 print:h-30 print:w-30"
+          />
+        )}
         {showStamp && (
           <img
             src={stamp}
             alt="School Stamp"
-            className="pointer-events-none -mb-1 h-12 w-12 flex-shrink-0 rounded-full object-contain opacity-90 print:h-12 print:w-12"
+            className="pointer-events-none -mb-1 h-30 w-30 flex-shrink-0 rounded-full object-contain opacity-90 print:h-30 print:w-30"
           />
         )}
         <div className="flex flex-1 items-center gap-2 text-[10px] text-slate-400 print:text-[8.5px]">
@@ -374,6 +421,7 @@ function ReportCardBody({
   papersFailed,
   termAverages,
   finalAverage,
+  gceStatus,
   classMasterByClass,
   settings,
   className = "",
@@ -410,7 +458,7 @@ function ReportCardBody({
             <img
               src={logo}
               alt="School Logo"
-              className="h-14 w-14 rounded-full object-cover print:h-14 print:w-14"
+              className="h-25 w-25 rounded-full object-cover print:h-14 print:w-14"
             />
             <h1 className="mt-0.5 text-sm font-bold uppercase tracking-tight text-[#0f172a] print:mt-0.5 print:text-[11px]">
               {termTitle}
@@ -542,6 +590,8 @@ function ReportCardBody({
           termAverages={termAverages}
           finalAverage={finalAverage}
           marksScale={settings.marksScale}
+          isStreamed={requiresStream(student.class)}
+          gceStatus={gceStatus}
         />
 
         {/* Remarks — stamp sits on the Principal's signature line */}
@@ -549,10 +599,12 @@ function ReportCardBody({
           <RemarkCard
             title="Class Master's Remarks"
             text="Well done. Keep working hard, and aim for consistency across all subjects."
+            showSignature
           />
           <RemarkCard
             title="Principal's Remarks"
             text="Good performance. Maintain discipline and continue improving in the next term."
+            showSignature
             showStamp
           />
         </div>
@@ -720,6 +772,7 @@ export default function ReportCards() {
 
   const studentRecords = useMemo(() => {
     const sequences = termSequences[term] || [];
+    const passThreshold = (Number(settings.marksScale) || 20) / 2;
     return students.map((student) => {
       const subjectList = getSubjectsForStudent(student);
       const subjects = subjectList.map((subject) => {
@@ -744,10 +797,16 @@ export default function ReportCards() {
         0,
       );
       const papersSat = subjects.filter((s) => s.average > 0).length;
-      const papersPassed = subjects.filter((s) => s.average >= 10).length;
-      const papersFailed = subjects.filter(
-        (s) => s.average > 0 && s.average < 10,
+      const papersPassed = subjects.filter(
+        (s) => s.average >= passThreshold,
       ).length;
+      const papersFailed = subjects.filter(
+        (s) => s.average > 0 && s.average < passThreshold,
+      ).length;
+      // GCE Standard: pass if at least 4 subjects individually clear the
+      // pass mark, regardless of overall average — only meaningful for
+      // Form 4/5 and Lower/Upper Sixth; the footer only displays it there.
+      const gceStatus = papersPassed >= 4 ? "Pass" : "Fail";
       return {
         student,
         subjects,
@@ -755,6 +814,7 @@ export default function ReportCards() {
         papersSat,
         papersPassed,
         papersFailed,
+        gceStatus,
         average: totalCoefficient ? totalWeighted / totalCoefficient : 0,
       };
     });
@@ -1121,6 +1181,7 @@ export default function ReportCards() {
                 papersSat={selectedRecord ? selectedRecord.papersSat : 0}
                 papersPassed={selectedRecord ? selectedRecord.papersPassed : 0}
                 papersFailed={selectedRecord ? selectedRecord.papersFailed : 0}
+                gceStatus={selectedRecord ? selectedRecord.gceStatus : "Fail"}
                 termAverages={
                   selectedStudent ? getTermAverages(selectedStudent.id) : null
                 }
@@ -1164,6 +1225,7 @@ export default function ReportCards() {
                   papersSat={record.papersSat}
                   papersPassed={record.papersPassed}
                   papersFailed={record.papersFailed}
+                  gceStatus={record.gceStatus}
                   termAverages={getTermAverages(record.student.id)}
                   finalAverage={getFinalAverage(record.student.id)}
                   classMasterByClass={classMasterByClass}

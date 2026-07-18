@@ -1,5 +1,16 @@
-import { useEffect, useState } from "react";
-import { UserPlus, Search, Pencil, Trash2, GraduationCap } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  UserPlus,
+  Search,
+  Pencil,
+  Trash2,
+  GraduationCap,
+  Upload,
+  Download,
+  X,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import {
   Card,
   CardHeader,
@@ -12,7 +23,12 @@ import {
   Badge,
   focusRing,
 } from "../../components/ui";
-import { addStudent, getClasses, getStudents } from "../../utils/api";
+import {
+  addStudent,
+  getClasses,
+  getStudents,
+  logActivity,
+} from "../../utils/api";
 import {
   CLASS_NAMES,
   requiresStream,
@@ -22,6 +38,7 @@ import {
   ELECTIVE_SUBJECTS,
   SIXTH_FORM_MAX_SUBJECTS,
 } from "../../utils/subjects";
+import { parseStudentsExcel, downloadTemplate } from "../../utils/excelImport";
 
 export default function StudentEntry() {
   const [students, setStudents] = useState([]);
@@ -38,6 +55,13 @@ export default function StudentEntry() {
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Bulk import state
+  const fileInputRef = useRef(null);
+  const [importRows, setImportRows] = useState(null); // null = no import in progress
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
 
   useEffect(() => {
     getStudents()
@@ -128,11 +152,117 @@ export default function StudentEntry() {
     }
   }
 
+  function triggerFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    setImportError("");
+    setImportProgress(0);
+    try {
+      const rows = await parseStudentsExcel(file, classes);
+      if (rows.length === 0) {
+        setImportError("No rows found in that file.");
+        return;
+      }
+      setImportRows(rows);
+    } catch (err) {
+      setImportError(
+        "Could not read that file. Make sure it's a valid .xlsx or .csv file.",
+      );
+    }
+  }
+
+  function closeImportPreview() {
+    setImportRows(null);
+    setImportError("");
+    setImportProgress(0);
+  }
+
+  async function handleConfirmImport() {
+    if (!importRows) return;
+    const validRows = importRows.filter((r) => r.valid);
+    if (validRows.length === 0) return;
+
+    setImporting(true);
+    setImportProgress(0);
+    const added = [];
+    const failed = [];
+
+    for (let i = 0; i < validRows.length; i++) {
+      const row = validRows[i];
+      try {
+        const student = await addStudent({
+          name: row.name,
+          class: row.class,
+          gender: row.gender,
+          guardian: row.guardian,
+          phone: row.phone,
+          dob: row.dob,
+          option: requiresStream(row.class) ? row.option : "",
+          electives: requiresStream(row.class) ? row.electives : "",
+        });
+        added.push(student);
+      } catch (err) {
+        failed.push({ ...row, error: err.message });
+      }
+      setImportProgress(i + 1);
+    }
+
+    if (added.length > 0) {
+      setStudents((prev) => [...prev, ...added]);
+      logActivity(
+        "Student",
+        `Bulk imported ${added.length} student${added.length === 1 ? "" : "s"} via Excel`,
+      ).catch(() => {});
+    }
+
+    setImporting(false);
+    if (failed.length > 0) {
+      setImportRows(
+        failed.map((f, i) => ({ ...f, rowNumber: f.rowNumber, valid: false })),
+      );
+      setImportError(
+        `${added.length} student${added.length === 1 ? "" : "s"} imported. ${failed.length} failed — see details below.`,
+      );
+    } else {
+      closeImportPreview();
+    }
+  }
+
+  const validCount = importRows ? importRows.filter((r) => r.valid).length : 0;
+  const invalidCount = importRows ? importRows.length - validCount : 0;
+
   return (
     <>
       <PageHeading
         title="Student Entry"
         subtitle="Register new students and manage existing student records."
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              icon={Download}
+              onClick={downloadTemplate}
+            >
+              Download Template
+            </Button>
+            <Button icon={Upload} onClick={triggerFilePicker}>
+              Import from Excel
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={handleFileSelected}
+            />
+          </div>
+        }
       />
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[380px_1fr]">
@@ -408,6 +538,127 @@ export default function StudentEntry() {
           )}
         </Card>
       </div>
+
+      {/* Bulk import preview modal */}
+      {importRows && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden p-0">
+            <div className="flex items-start justify-between gap-4 border-b border-[#e2e8f0] p-5">
+              <div>
+                <h3 className="text-lg font-bold tracking-tight text-[#1e3a8a]">
+                  Import Preview
+                </h3>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  {importRows.length} row{importRows.length === 1 ? "" : "s"}{" "}
+                  found —{" "}
+                  <span className="font-medium text-emerald-600">
+                    {validCount} ready
+                  </span>
+                  {invalidCount > 0 && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      <span className="font-medium text-rose-500">
+                        {invalidCount} need fixing
+                      </span>
+                    </>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={closeImportPreview}
+                className="rounded-md p-1.5 text-slate-400 hover:bg-[#f1f5f9] hover:text-[#1e3a8a]"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {importError && (
+              <p className="border-b border-[#e2e8f0] bg-amber-50 px-5 py-2.5 text-sm text-amber-700">
+                {importError}
+              </p>
+            )}
+
+            <div className="flex-1 overflow-auto p-5">
+              <Table
+                columns={[
+                  "Row",
+                  "",
+                  "Full Name",
+                  "Class",
+                  "Option",
+                  "Gender",
+                  "Guardian",
+                  "Phone",
+                  "Issues",
+                ]}
+              >
+                {importRows.map((row) => (
+                  <tr
+                    key={row.rowNumber}
+                    className={row.valid ? "" : "bg-rose-50/60"}
+                  >
+                    <td className="px-4 py-3 font-mono text-xs text-slate-500">
+                      {row.rowNumber}
+                    </td>
+                    <td className="px-4 py-3">
+                      {row.valid ? (
+                        <CheckCircle2 size={16} className="text-emerald-500" />
+                      ) : (
+                        <AlertCircle size={16} className="text-rose-500" />
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-[#1e3a8a]">
+                      {row.name || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {row.class || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {row.option || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{row.gender}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.guardian}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.phone}</td>
+                    <td className="px-4 py-3 text-xs text-rose-500">
+                      {row.errors && row.errors.length > 0
+                        ? row.errors.join("; ")
+                        : row.error || ""}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-[#e2e8f0] p-5">
+              <p className="text-xs text-slate-400">
+                Rows with issues will be skipped — fix your file and re-upload
+                if you need them included.
+              </p>
+              <div className="flex flex-shrink-0 items-center gap-3">
+                {importing && (
+                  <span className="text-xs text-slate-400">
+                    Importing {importProgress}/{validCount}…
+                  </span>
+                )}
+                <Button variant="outline" onClick={closeImportPreview}>
+                  Cancel
+                </Button>
+                <Button
+                  icon={Upload}
+                  onClick={handleConfirmImport}
+                  disabled={validCount === 0 || importing}
+                >
+                  {importing
+                    ? "Importing…"
+                    : `Import ${validCount} Student${validCount === 1 ? "" : "s"}`}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </>
   );
 }

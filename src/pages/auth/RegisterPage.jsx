@@ -27,17 +27,17 @@ const RegisterPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-    
+
     if (!name || !email || !password) {
       setError("Please fill in all the fields");
       return;
     }
-    
+
     if (password.length < 6) {
       setError("Password must contain at least 6 characters");
       return;
     }
-    
+
     setLoading(true);
     try {
       await register(name, email, password, role);
@@ -112,7 +112,7 @@ const RegisterPage = () => {
         ></div>
       </div>
       <div className="border absolute bg-white md:w-88 border-white p-8 rounded-xs shadow-xl">
-        <div className="cursor-pointer" onClick={() => Navigate(-1)}>
+        <div className="cursor-pointer" onClick={() => navigate(-1)}>
           <ArrowLeft className="w-5 h-5 text-[#64748B] hover:text-[#2563EB] transition" />
         </div>
         <div className="text-center mb-2">
@@ -209,7 +209,7 @@ const RegisterPage = () => {
         </form>
         <div className="mt-2 text-center">
           <p className="text-gray-400 text-sm">
-            Don't have an account?{" "}
+            Already have an account?{" "}
             <Link
               to="/login"
               className="text-[#2563EB] cursor-pointer hover:underline font-medium"

@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.DEV ? "" : "http://localhost:8080";
+const API_BASE = import.meta.env.DEV
+  ? ""
+  : import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
 export async function getJson(path) {
   const res = await fetch(API_BASE + path);
@@ -29,6 +31,31 @@ export async function deleteJson(path) {
     throw new Error(`API error ${res.status}: ${body}`);
   }
   return await res.json();
+}
+
+// Auth endpoints return a structured { error: "..." } body on failure
+// rather than plain text, so login/register parse that out to surface a
+// clean message (e.g. "Invalid email or password") instead of a raw
+// "API error 401: {...}" string.
+async function postAuthJson(path, data) {
+  const res = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return body;
+}
+
+export function login(email, password) {
+  return postAuthJson("/api/login", { email, password });
+}
+
+export function register(name, email, password, role) {
+  return postAuthJson("/api/register", { name, email, password, role });
 }
 
 export function getStudents() {

@@ -22,19 +22,19 @@ const LoginPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-    
+
     if (!email || !password) {
       setError("Please fill in all the fields");
       return;
     }
-    
+
     setLoading(true);
     try {
       const user = await login(email, password);
       // Redirect based on role
-      if (user.role === 'admin') {
+      if (user.role === "admin") {
         navigate("/admin/dashboard");
-      } else if (user.role === 'teacher') {
+      } else if (user.role === "teacher") {
         navigate("/teacher/dashboard");
       } else {
         navigate("/dashboard");
@@ -58,7 +58,7 @@ const LoginPage = () => {
         ></div>
       </div>
       <div className="border absolute bg-white md:w-88 border-white p-8 rounded-xs shadow-xl">
-        <div className="cursor-pointer" onClick={() => Navigate(-1)}>
+        <div className="cursor-pointer" onClick={() => navigate(-1)}>
           <ArrowLeft className="w-5 h-5 text-[#64748B] hover:text-[#2563EB] transition" />
         </div>
         <div className="text-center mb-2">
@@ -146,7 +146,10 @@ const LoginPage = () => {
             <span className="h-[1px] border border-[#E2E8F0] w-[25%]"></span>
           </div>
 
-          <button className="w-full py-2 rounded-xs cursor-pointer text-black border border-[#E2E8F0] font-semibold hover:bg-gray-200 transition transform  flex items-center justify-center gap-2">
+          <button
+            type="button"
+            className="w-full py-2 rounded-xs cursor-pointer text-black border border-[#E2E8F0] font-semibold hover:bg-gray-200 transition transform  flex items-center justify-center gap-2"
+          >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
               <path
                 d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"

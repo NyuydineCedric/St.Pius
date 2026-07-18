@@ -1,20 +1,19 @@
-import React from "react";
-
-const Card = ({ icon, title, text }) => {
+const Card = ({ icon, image, title, text }) => {
   return (
-    <div className="border border-white/80 px-5 py-6 text-center sm:px-6 rounded-[4px] bg-white backdrop-blur-sm shadow-sm hover:shadow-2xl transition-all duration-300">
-      <div className="inline-flex mb-4">
-        <div
-          className="w-16 h-16 rounded-full bg-accent flex items-center justify-center 
-                      bg-blue-600/12 shadow-xs"
-        >
-          <div className="z-10 text-blue-600 text-2xl">
-            {icon}
-          </div>
+    <div className="flex flex-col items-start gap-3 p-5 rounded-lg bg-white shadow-2xs hover:shadow-md transition">
+      {image ? (
+        <img
+          src={image}
+          alt={title}
+          className="w-full h-32 object-cover rounded-md mb-2"
+        />
+      ) : (
+        <div className="w-12 h-12 rounded-full flex justify-center items-center bg-blue-600/12 shadow-2xs">
+          <div className="text-[#2563eb] text-2xl">{icon}</div>
         </div>
-      </div>
-      <h3 className="font-semibold text-[1.45rem] sm:text-[1.65rem] tracking-[-0.03em] text-[#0F172A] mb-1">{title}</h3>
-      <p className="mx-auto mt-2 max-w-[18rem] text-[1.03rem] text-base text-[#64748B] leading-[1.35]">{text}</p>
+      )}
+      <h3 className="text-lg font-semibold text-[#0F172A]">{title}</h3>
+      <p className="text-[#64748B] text-sm">{text}</p>
     </div>
   );
 };

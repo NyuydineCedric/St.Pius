@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save, CheckCircle2, UserCog } from "lucide-react";
+import { Save, CheckCircle2 } from "lucide-react";
 import {
   Card,
   CardHeader,
@@ -17,6 +17,7 @@ import {
   getSettings,
 } from "../../utils/api";
 import { getSubjectsForStudent } from "../../utils/subjects";
+import { useAuth } from "../../context/AuthContext";
 
 const termSequences = {
   "First Term": ["Sequence 1", "Sequence 2"],
@@ -26,9 +27,14 @@ const termSequences = {
 const terms = Object.keys(termSequences);
 
 export default function TeacherMarksEntry() {
-  const [teachers, setTeachers] = useState([]);
-  const [teacherId, setTeacherId] = useState("");
-  const [assignmentKey, setAssignmentKey] = useState(""); // "className|||subject"
+  const { user } = useAuth();
+
+  const [teacherRecord, setTeacherRecord] = useState(null);
+  const [teacherLoading, setTeacherLoading] = useState(true);
+  const [teacherLookupError, setTeacherLookupError] = useState("");
+
+  const [className, setClassName] = useState("");
+  const [subjectName, setSubjectName] = useState("");
   const [term, setTerm] = useState("Second Term");
   const [roster, setRoster] = useState([]);
   const [marksBySequence, setMarksBySequence] = useState({}); // { seq: { studentId: value } }
@@ -38,11 +44,57 @@ export default function TeacherMarksEntry() {
   const [error, setError] = useState("");
   const [marksScale, setMarksScale] = useState(20);
 
+  // Identify the logged-in teacher's staff record. AuthContext only gives
+  // us the login account (user.id / user.email from the "users" table),
+  // which is a separate record from "teachers" — so we match on email,
+  // the one field both share.
   useEffect(() => {
+    if (!user) {
+      setTeacherLoading(false);
+      return;
+    }
+    setTeacherLoading(true);
     getTeachers()
-      .then(setTeachers)
-      .catch((err) => setError(err.message));
+      .then((list) => {
+        const match = list.find(
+          (t) => t.email?.toLowerCase() === user.email?.toLowerCase(),
+        );
+        if (!match) {
+          setTeacherLookupError(
+            "No teacher profile is linked to your account yet. Ask an admin to check your email matches your staff record in Settings → Staff Management.",
+          );
+        } else {
+          setTeacherRecord(match);
+        }
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setTeacherLoading(false));
+  }, [user]);
 
+  const assignments = teacherRecord ? teacherRecord.assignments : [];
+
+  // Classes this teacher teaches (deduplicated).
+  const classOptions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    assignments.forEach((a) => {
+      if (!seen.has(a.class)) {
+        seen.add(a.class);
+        out.push(a.class);
+      }
+    });
+    return out;
+  }, [assignments]);
+
+  // Subjects this teacher teaches within the selected class.
+  const subjectOptions = useMemo(() => {
+    if (!className) return [];
+    return assignments
+      .filter((a) => a.class === className)
+      .map((a) => a.subject);
+  }, [assignments, className]);
+
+  useEffect(() => {
     getSettings()
       .then((settings) => {
         setMarksScale(Number(settings.marksScale) || 20);
@@ -52,17 +104,10 @@ export default function TeacherMarksEntry() {
       });
   }, []);
 
-  const selectedTeacher = teachers.find((t) => t.id === teacherId) || null;
-  const assignments = selectedTeacher ? selectedTeacher.assignments : [];
-
-  const [className, subjectName] = assignmentKey
-    ? assignmentKey.split("|||")
-    : ["", ""];
-
   const sequences = termSequences[term] || [];
 
-  // Load the roster for the assignment's class, then filter down to only
-  // the students who actually study this subject (Science/Arts streaming,
+  // Load the roster for the selected class, then filter down to only the
+  // students who actually study this subject (Science/Arts streaming,
   // electives, Sixth Form free choice all affect this).
   useEffect(() => {
     if (!className || !subjectName) {
@@ -98,7 +143,7 @@ export default function TeacherMarksEntry() {
         });
         setMarksBySequence(next);
       } catch (err) {
-        setError(err.message);
+        if (active) setError(err.message);
       }
     };
     load();
@@ -114,6 +159,13 @@ export default function TeacherMarksEntry() {
       ...prev,
       [sequence]: { ...prev[sequence], [studentId]: value },
     }));
+  }
+
+  function clampMark(value) {
+    if (value === "" || value === null || value === undefined) return value;
+    const n = Number(value);
+    if (Number.isNaN(n)) return value;
+    return Math.min(Math.max(n, 0), marksScale);
   }
 
   async function handleSave(e) {
@@ -137,7 +189,7 @@ export default function TeacherMarksEntry() {
             v !== null &&
             !Number.isNaN(Number(v))
           ) {
-            cleaned[s.id] = Number(v);
+            cleaned[s.id] = clampMark(v);
           }
         });
         if (Object.keys(cleaned).length > 0) {
@@ -152,69 +204,82 @@ export default function TeacherMarksEntry() {
     }
   }
 
-  const assignmentOptions = useMemo(
-    () =>
-      assignments.map((a) => ({
-        key: `${a.class}|||${a.subject}`,
-        label: `${a.subject} · ${a.class}`,
-      })),
-    [assignments],
-  );
+  if (teacherLoading) {
+    return (
+      <>
+        <PageHeading
+          title="My Marks Entry"
+          subtitle="Loading your teaching profile…"
+        />
+      </>
+    );
+  }
+
+  if (teacherLookupError) {
+    return (
+      <>
+        <PageHeading title="My Marks Entry" subtitle=" " />
+        <Card>
+          <p className="py-6 text-center text-sm text-rose-500">
+            {teacherLookupError}
+          </p>
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>
       <PageHeading
         title="My Marks Entry"
-        subtitle={`Choose your class and subject, then enter marks for both sequences of the term (out of ${marksScale}).`}
+        subtitle={`Welcome ${teacherRecord?.name || ""}. Choose a class and subject, then enter marks for both sequences of the term (out of ${marksScale}).`}
       />
 
       <Card>
         <CardHeader
-          title="Select Assignment"
-          subtitle="Pick which teacher you are, then which class/subject to mark."
-          action={<UserCog size={18} className="text-slate-300" />}
+          title="Select Class & Subject"
+          subtitle="Only classes and subjects assigned to you appear here."
         />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div>
-            <Label htmlFor="teacher">Teacher</Label>
+            <Label htmlFor="className">Class</Label>
             <Select
-              id="teacher"
-              value={teacherId}
+              id="className"
+              value={className}
               onChange={(e) => {
-                setTeacherId(e.target.value);
-                setAssignmentKey("");
+                setClassName(e.target.value);
+                setSubjectName("");
               }}
             >
-              <option value="">-- Select yourself --</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.id})
+              <option value="">-- Select a class --</option>
+              {classOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
                 </option>
               ))}
             </Select>
+            {classOptions.length === 0 && (
+              <p className="mt-1 text-xs text-amber-600">
+                You have not been assigned to any classes yet.
+              </p>
+            )}
           </div>
 
           <div>
-            <Label htmlFor="assignment">Class · Subject</Label>
+            <Label htmlFor="subjectName">Subject</Label>
             <Select
-              id="assignment"
-              value={assignmentKey}
-              onChange={(e) => setAssignmentKey(e.target.value)}
-              disabled={!teacherId}
+              id="subjectName"
+              value={subjectName}
+              onChange={(e) => setSubjectName(e.target.value)}
+              disabled={!className}
             >
-              <option value="">-- Select an assignment --</option>
-              {assignmentOptions.map((opt) => (
-                <option key={opt.key} value={opt.key}>
-                  {opt.label}
+              <option value="">-- Select a subject --</option>
+              {subjectOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}
                 </option>
               ))}
             </Select>
-            {teacherId && assignmentOptions.length === 0 && (
-              <p className="mt-1 text-xs text-amber-600">
-                No classes/subjects assigned yet — see Settings → Staff
-                Management.
-              </p>
-            )}
           </div>
 
           <div>
@@ -237,12 +302,12 @@ export default function TeacherMarksEntry() {
           title={
             className && subjectName
               ? `${subjectName} · ${className} · ${term}`
-              : "No assignment selected"
+              : "No class/subject selected"
           }
           subtitle={
             className && subjectName
               ? `${roster.length} student${roster.length === 1 ? "" : "s"} offering this subject`
-              : "Select a teacher and assignment above to begin."
+              : "Select a class and subject above to begin."
           }
           action={
             saved && (
@@ -257,7 +322,7 @@ export default function TeacherMarksEntry() {
 
         {!className || !subjectName ? (
           <div className="rounded-xl border border-dashed border-[#e2e8f0] py-10 text-center text-sm text-slate-400">
-            Choose a teacher and an assignment to see the student list.
+            Choose a class and subject to see the student list.
           </div>
         ) : loadingRoster ? (
           <p className="py-10 text-center text-sm text-slate-400">
@@ -290,6 +355,9 @@ export default function TeacherMarksEntry() {
                         step={0.5}
                         value={marksBySequence[seq]?.[s.id] ?? ""}
                         onChange={(e) => updateMark(s.id, seq, e.target.value)}
+                        onBlur={(e) =>
+                          updateMark(s.id, seq, clampMark(e.target.value))
+                        }
                         className="w-24 rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-sm focus:border-[#0ea5e9] focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]/15"
                         placeholder="—"
                       />
