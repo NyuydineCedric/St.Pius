@@ -1565,8 +1565,11 @@ public class Main {
                     ResultSet rs = st.executeQuery(sql)) {
                 while (rs.next()) {
                     String id = rs.getString("id");
-                    Teacher t = byId.computeIfAbsent(id,
-                            k -> new Teacher(id, rs.getString("name"), rs.getString("email"), rs.getString("phone")));
+                    Teacher t = byId.get(id);
+                    if (t == null) {
+                        t = new Teacher(id, rs.getString("name"), rs.getString("email"), rs.getString("phone"));
+                        byId.put(id, t);
+                    }
                     String cls = rs.getString("class_name");
                     String subj = rs.getString("subject");
                     if (cls != null && subj != null) {
