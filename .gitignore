@@ -26,9 +26,11 @@ dist-ssr
 # Electron build output
 release/
 staging/
+.data/
 
 # Compiled Java — only .java source should be tracked
 backend/target/
+backend/bin/
 backend/src/main/java/**/*.class
 backend/src/main/java/**/*.ser
 
@@ -37,3 +39,6 @@ backend/src/main/java/public/
 
 # Runtime data — not source code
 *.ser
+*.ser.bak
+.env
+.env.local

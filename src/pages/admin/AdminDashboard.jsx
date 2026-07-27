@@ -33,10 +33,10 @@ import {
 import { getSubjectsForStudent } from "../../utils/subjects";
 
 const quickActions = [
-  { label: "Add New Student", icon: UserPlus, to: "/students" },
-  { label: "Enter Marks", icon: PenSquare, to: "/marks" },
-  { label: "Generate Report Card", icon: FileText, to: "/report-cards" },
-  { label: "View Classes", icon: Users, to: "/classes" },
+  { label: "Add New Student", icon: UserPlus, to: "/admin/students" },
+  { label: "Enter Marks", icon: PenSquare, to: "/admin/marks" },
+  { label: "Generate Report Card", icon: FileText, to: "/admin/report-cards" },
+  { label: "View Classes", icon: Users, to: "/admin/classes" },
 ];
 
 const iconByType = {
@@ -336,7 +336,7 @@ export default function AdminDashboard() {
               </ul>
             )}
             <Link
-              to="/activities"
+              to="/admin/activities"
               className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-[#0ea5e9] hover:underline"
             >
               View all activity <ChevronRight size={14} />

@@ -1,3 +1,3 @@
 @echo off
-cd /d "%~dp0backend"
-java -jar target\report-card-backend-1.0.0.jar
+REM Deprecated entry — use scripts\start-backend.bat
+call "%~dp0scripts\start-backend.bat"

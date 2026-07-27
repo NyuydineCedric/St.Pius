@@ -36,14 +36,8 @@ const MATHEMATICS = SCIENCE_SUBJECTS.find((s) => s.name === "Mathematics");
 const CHEMISTRY = SCIENCE_SUBJECTS.find((s) => s.name === "Chemistry");
 const HISTORY = ARTS_SUBJECTS.find((s) => s.name === "History");
 
-export const O_LEVEL_STREAM_CLASSES = ["Form 4", "Form 5"];
-export const SIXTH_FORM_CLASSES = ["Lower Sixth", "Upper Sixth"];
-export const STREAM_CLASSES = [
-  ...O_LEVEL_STREAM_CLASSES,
-  ...SIXTH_FORM_CLASSES,
-];
-
-export const CLASS_NAMES = [
+/** Curriculum levels (no section letter). */
+export const CLASS_LEVELS = [
   "Form 1",
   "Form 2",
   "Form 3",
@@ -53,16 +47,108 @@ export const CLASS_NAMES = [
   "Upper Sixth",
 ];
 
+/** @deprecated Use CLASS_LEVELS — kept for older imports */
+export const CLASS_NAMES = CLASS_LEVELS;
+
+export const O_LEVEL_STREAM_LEVELS = ["Form 4", "Form 5"];
+export const SIXTH_FORM_LEVELS = ["Lower Sixth", "Upper Sixth"];
+export const STREAM_LEVELS = [...O_LEVEL_STREAM_LEVELS, ...SIXTH_FORM_LEVELS];
+
+/** @deprecated Use O_LEVEL_STREAM_LEVELS */
+export const O_LEVEL_STREAM_CLASSES = O_LEVEL_STREAM_LEVELS;
+/** @deprecated Use SIXTH_FORM_LEVELS */
+export const SIXTH_FORM_CLASSES = SIXTH_FORM_LEVELS;
+/** @deprecated Use STREAM_LEVELS */
+export const STREAM_CLASSES = STREAM_LEVELS;
+
+/** Common Cameroon parallel-arm letters schools pick from. */
+export const SECTION_SUGGESTIONS = ["A", "B", "C", "D", "E", "F"];
+
 // Sixth formers pick their own subjects, capped at 5 total (including the
 // one compulsory anchor subject for their stream).
 export const SIXTH_FORM_MAX_SUBJECTS = 5;
 
+/**
+ * Normalize a class display name: trim, collapse spaces, glue section letter
+ * to the level ("Form 1 A" / "Form 1A" → "Form 1A").
+ */
+export function normalizeClassName(raw) {
+  if (raw == null) return "";
+  let s = String(raw).trim().replace(/\s+/g, " ");
+  if (!s) return "";
+
+  for (const level of CLASS_LEVELS) {
+    if (s === level) return level;
+    // "Form 1A" or "Form 1 A" or "form 1 a"
+    const escaped = level.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`^${escaped}\\s*([A-Za-z])$`, "i");
+    const m = s.match(re);
+    if (m) return `${level}${m[1].toUpperCase()}`;
+  }
+  return s;
+}
+
+/**
+ * Split "Form 1A" → { level: "Form 1", section: "A" }.
+ * Unknown names return the whole string as level with empty section.
+ */
+export function parseClassName(name) {
+  const normalized = normalizeClassName(name);
+  if (!normalized) return { level: "", section: "" };
+
+  for (const level of CLASS_LEVELS) {
+    if (normalized === level) return { level, section: "" };
+    if (normalized.startsWith(level)) {
+      const rest = normalized.slice(level.length);
+      if (/^[A-Za-z]$/.test(rest)) {
+        return { level, section: rest.toUpperCase() };
+      }
+    }
+  }
+  return { level: normalized, section: "" };
+}
+
+export function buildClassName(level, section) {
+  const lvl = (level || "").trim();
+  if (!lvl) return "";
+  const sec = (section || "").trim().toUpperCase();
+  if (!sec) return normalizeClassName(lvl);
+  // If level already includes a section, prefer explicit section arg.
+  const base = parseClassName(lvl).level || lvl;
+  return normalizeClassName(`${base}${sec}`);
+}
+
+export function getClassLevel(className) {
+  return parseClassName(className).level;
+}
+
 export function requiresStream(className) {
-  return STREAM_CLASSES.includes(className);
+  return STREAM_LEVELS.includes(getClassLevel(className));
 }
 
 export function isSixthForm(className) {
-  return SIXTH_FORM_CLASSES.includes(className);
+  return SIXTH_FORM_LEVELS.includes(getClassLevel(className));
+}
+
+/** Sort key for display: level order, then section letter. */
+export function classSortKey(className) {
+  const { level, section } = parseClassName(className);
+  const levelIdx = CLASS_LEVELS.indexOf(level);
+  return [
+    levelIdx >= 0 ? levelIdx : 99,
+    section || "",
+    className || "",
+  ];
+}
+
+export function compareClassNames(a, b) {
+  const ka = classSortKey(a);
+  const kb = classSortKey(b);
+  for (let i = 0; i < ka.length; i++) {
+    if (ka[i] < kb[i]) return -1;
+    if (ka[i] > kb[i]) return 1;
+  }
+  return 0;
 }
 
 // The compulsory ("locked in") subjects for a class + stream, before any
@@ -83,9 +169,9 @@ export function getCoreSubjects(className, option) {
     return [];
   }
 
-  // Form 4 / Form 5
+  // Form 4 / Form 5 (any section)
   if (option === "Science") {
-    return [...GENERAL_SUBJECTS, ...SCIENCE_SUBJECTS]; // Mathematics already included
+    return [...GENERAL_SUBJECTS, ...SCIENCE_SUBJECTS];
   }
   if (option === "Arts") {
     return [...GENERAL_SUBJECTS, ...ARTS_SUBJECTS, MATHEMATICS];
@@ -132,11 +218,12 @@ export function getSubjectsForStudent(student) {
   return [...core, ...extra.filter((s) => !already.has(s.name))];
 }
 
-
 // assigned teacher for a class + subject from Staff Management data.
 export function getTeacherName(teachers, className, subjectName) {
   const match = teachers.find((t) =>
-    t.assignments.some((a) => a.class === className && a.subject === subjectName),
+    t.assignments.some(
+      (a) => a.class === className && a.subject === subjectName,
+    ),
   );
   return match ? match.name : "Unassigned";
 }

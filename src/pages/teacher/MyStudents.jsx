@@ -1,16 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Users,
   ChevronLeft,
   GraduationCap,
   BookOpen,
   AlertCircle,
+  Search,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { getTeachers, getRoster } from "../../utils/api";
+import { useSearchParams } from "react-router-dom";
 
 export default function MyStudents() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -21,6 +24,9 @@ export default function MyStudents() {
 
   const [roster, setRoster] = useState([]);
   const [rosterLoading, setRosterLoading] = useState(false);
+  const [rosterSearch, setRosterSearch] = useState(
+    searchParams.get("q") || "",
+  );
 
   // Step 1: find this teacher's assignments by matching email against the
   // Teacher staff list, then collapse assignments into unique classes.
@@ -105,6 +111,14 @@ export default function MyStudents() {
       cancelled = true;
     };
   }, [selectedClass, selectedSubject]);
+
+  const filteredRoster = useMemo(() => {
+    const q = rosterSearch.trim().toLowerCase();
+    if (!q) return roster;
+    return roster.filter((s) =>
+      `${s.name} ${s.id} ${s.gender || ""}`.toLowerCase().includes(q),
+    );
+  }, [roster, rosterSearch]);
 
   const goBack = () => {
     if (selectedSubject) {
@@ -211,12 +225,27 @@ export default function MyStudents() {
         Back
       </button>
 
-      <div className="mb-4 flex items-center gap-2">
-        <Users size={18} className="text-[#1e3a8a]" />
-        <h2 className="text-lg font-semibold text-[#1e3a8a]">
-          {selectedClass} · {selectedSubject} — {roster.length} student
-          {roster.length !== 1 ? "s" : ""}
-        </h2>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <Users size={18} className="text-[#1e3a8a]" />
+          <h2 className="text-lg font-semibold text-[#1e3a8a]">
+            {selectedClass} · {selectedSubject} — {roster.length} student
+            {roster.length !== 1 ? "s" : ""}
+          </h2>
+        </div>
+        <div className="relative">
+          <Search
+            size={15}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+          />
+          <input
+            type="search"
+            value={rosterSearch}
+            onChange={(e) => setRosterSearch(e.target.value)}
+            placeholder="Search roster…"
+            className="w-full rounded-full border border-[#e2e8f0] bg-white py-1.5 pl-8 pr-3 text-sm text-slate-600 placeholder:text-slate-400 focus:border-[#0ea5e9] focus:outline-none sm:w-56"
+          />
+        </div>
       </div>
 
       {rosterLoading ? (
@@ -226,6 +255,10 @@ export default function MyStudents() {
       ) : roster.length === 0 ? (
         <div className="rounded-xl border border-[#e2e8f0] bg-white py-12 text-center text-sm text-slate-400">
           No students enrolled in this class yet.
+        </div>
+      ) : filteredRoster.length === 0 ? (
+        <div className="rounded-xl border border-[#e2e8f0] bg-white py-12 text-center text-sm text-slate-400">
+          No students match “{rosterSearch.trim()}”.
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-[#e2e8f0] bg-white shadow-sm">
@@ -240,7 +273,7 @@ export default function MyStudents() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#e2e8f0]">
-              {roster.map((s, index) => (
+              {filteredRoster.map((s, index) => (
                 <tr key={s.id} className="hover:bg-[#f1f5f9]">
                   <td className="px-4 py-3 text-slate-400">{index + 1}</td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">

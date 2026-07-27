@@ -20,6 +20,7 @@ import {
   getSubjectsForStudent,
   getTeacherName,
   requiresStream,
+  compareClassNames,
 } from "../../utils/subjects";
 
 const termSequences = {
@@ -34,6 +35,7 @@ export default function MarksEntry() {
   const [cls, setCls] = useState("");
   const [optionFilter, setOptionFilter] = useState("All");
   const [student, setStudent] = useState("");
+  const [studentSearch, setStudentSearch] = useState("");
   const [term, setTerm] = useState("Second Term");
   const [sequence, setSequence] = useState(termSequences["Second Term"][0]);
   const [marks, setMarks] = useState({});
@@ -46,7 +48,7 @@ export default function MarksEntry() {
   useEffect(() => {
     getClasses()
       .then((data) => {
-        const list = data.map((c) => c.name);
+        const list = data.map((c) => c.name).sort(compareClassNames);
         setClasses(list);
         if (list.length > 0) setCls(list[0]);
       })
@@ -91,8 +93,16 @@ export default function MarksEntry() {
       ? roster.filter((s) => s.option === optionFilter)
       : roster;
 
+  const searchableRoster = studentSearch.trim()
+    ? filteredRoster.filter((s) =>
+        `${s.name} ${s.id}`
+          .toLowerCase()
+          .includes(studentSearch.trim().toLowerCase()),
+      )
+    : filteredRoster;
+
   const selectedStudentRecord =
-    filteredRoster.find((s) => s.id === student) || null;
+    roster.find((s) => s.id === student) || null;
   const subjectRows = selectedStudentRecord
     ? getSubjectsForStudent(selectedStudentRecord)
     : [];
@@ -130,9 +140,13 @@ export default function MarksEntry() {
     try {
       for (const subject of Object.keys(marks)) {
         const mark = marks[subject];
-        if (mark !== "" && mark !== null) {
-          const marksObj = { [student]: Number(mark) };
-          await saveMarks(cls, subject, sequence, marksObj);
+        if (mark === "" || mark === null) {
+          // Explicit null clears a previously saved mark.
+          await saveMarks(cls, subject, sequence, { [student]: null });
+        } else {
+          await saveMarks(cls, subject, sequence, {
+            [student]: Number(mark),
+          });
         }
       }
       setSaved(true);
@@ -167,6 +181,7 @@ export default function MarksEntry() {
                 setCls(e.target.value);
                 setOptionFilter("All");
                 setStudent("");
+                setStudentSearch("");
               }}
             >
               {classes.map((c) => (
@@ -195,13 +210,20 @@ export default function MarksEntry() {
 
           <div>
             <Label htmlFor="student">Student</Label>
+            <input
+              type="search"
+              value={studentSearch}
+              onChange={(e) => setStudentSearch(e.target.value)}
+              placeholder="Filter students…"
+              className="mb-2 w-full rounded-lg border border-[#e2e8f0] bg-[#f1f5f9] px-3 py-2 text-sm text-slate-600 placeholder:text-slate-400 focus:border-[#0ea5e9] focus:bg-white focus:outline-none"
+            />
             <Select
               id="student"
               value={student}
               onChange={(e) => setStudent(e.target.value)}
             >
               <option value="">-- Select a student --</option>
-              {filteredRoster.map((s) => (
+              {searchableRoster.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} ({s.id}){s.option ? ` — ${s.option}` : ""}
                 </option>

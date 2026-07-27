@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   UserPlus,
   Search,
@@ -25,12 +26,15 @@ import {
 } from "../../components/ui";
 import {
   addStudent,
+  updateStudent,
+  deleteStudent,
   getClasses,
   getStudents,
   logActivity,
 } from "../../utils/api";
 import {
-  CLASS_NAMES,
+  CLASS_LEVELS,
+  compareClassNames,
   requiresStream,
   isSixthForm,
   getCoreSubjects,
@@ -41,8 +45,10 @@ import {
 import { parseStudentsExcel, downloadTemplate } from "../../utils/excelImport";
 
 export default function StudentEntry() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
+  const [search, setSearch] = useState(searchParams.get("q") || "");
   const [form, setForm] = useState({
     name: "",
     dob: "",
@@ -55,6 +61,7 @@ export default function StudentEntry() {
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   // Bulk import state
   const fileInputRef = useRef(null);
@@ -64,17 +71,45 @@ export default function StudentEntry() {
   const [importProgress, setImportProgress] = useState(0);
 
   useEffect(() => {
+    const q = searchParams.get("q") || "";
+    setSearch(q);
+  }, [searchParams]);
+
+  useEffect(() => {
     getStudents()
       .then(setStudents)
       .catch((err) => setError(err.message));
     getClasses()
       .then((data) => {
-        const names = data.map((c) => c.name);
-        const merged = Array.from(new Set([...CLASS_NAMES, ...names]));
-        setClasses(merged);
+        const names = data
+          .map((c) => c.name)
+          .sort(compareClassNames);
+        // Prefer configured classes; fall back to bare levels only if none yet.
+        const list = names.length > 0 ? names : [...CLASS_LEVELS];
+        setClasses(list);
+        setForm((f) => ({
+          ...f,
+          class: f.class && list.includes(f.class) ? f.class : list[0] || "",
+        }));
       })
       .catch((err) => setError(err.message));
   }, []);
+
+  const filteredStudents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter((s) =>
+      `${s.name} ${s.id} ${s.class} ${s.guardian || ""} ${s.phone || ""}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [students, search]);
+
+  function onSearchChange(value) {
+    setSearch(value);
+    if (value.trim()) setSearchParams({ q: value });
+    else setSearchParams({});
+  }
 
   const streamRequired = requiresStream(form.class);
   const sixthForm = isSixthForm(form.class);
@@ -108,6 +143,57 @@ export default function StudentEntry() {
     });
   }
 
+  function resetForm(classList = classes) {
+    setEditingId(null);
+    setForm({
+      name: "",
+      dob: "",
+      gender: "Male",
+      class: classList[0] || "Form 1",
+      guardian: "",
+      phone: "",
+      option: "",
+      electives: [],
+    });
+  }
+
+  function startEdit(student) {
+    setEditingId(student.id);
+    setError("");
+    setForm({
+      name: student.name || "",
+      dob: student.dob && student.dob !== "—" ? student.dob : "",
+      gender: student.gender || "Male",
+      class: student.class || classes[0] || "Form 1",
+      guardian: student.guardian && student.guardian !== "—" ? student.guardian : "",
+      phone: student.phone && student.phone !== "—" ? student.phone : "",
+      option: student.option || "",
+      electives: student.electives
+        ? student.electives.split(",").map((s) => s.trim()).filter(Boolean)
+        : [],
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function handleDelete(student) {
+    if (
+      !window.confirm(
+        `Remove ${student.name} (${student.id})? Their marks will also be deleted.`,
+      )
+    ) {
+      return;
+    }
+    setError("");
+    try {
+      await deleteStudent(student.id);
+      setStudents((list) => list.filter((x) => x.id !== student.id));
+      if (editingId === student.id) resetForm();
+      await logActivity("Student", `Student removed — ${student.name}`);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!form.name.trim()) return;
@@ -123,28 +209,28 @@ export default function StudentEntry() {
     }
     setSaving(true);
     setError("");
+    const payload = {
+      name: form.name.trim(),
+      class: form.class || classes[0] || "Form 1",
+      gender: form.gender,
+      guardian: form.guardian.trim() || "—",
+      phone: form.phone.trim() || "—",
+      dob: form.dob || "—",
+      option: streamRequired ? form.option : "",
+      electives: streamRequired ? form.electives.join(",") : "",
+    };
     try {
-      const student = await addStudent({
-        name: form.name.trim(),
-        class: form.class || classes[0] || "Form 1",
-        gender: form.gender,
-        guardian: form.guardian.trim() || "—",
-        phone: form.phone.trim() || "—",
-        dob: form.dob || "—",
-        option: streamRequired ? form.option : "",
-        electives: streamRequired ? form.electives.join(",") : "",
-      });
-      setStudents((prev) => [...prev, student]);
-      setForm({
-        name: "",
-        dob: "",
-        gender: "Male",
-        class: classes[0] || "Form 1",
-        guardian: "",
-        phone: "",
-        option: "",
-        electives: [],
-      });
+      if (editingId) {
+        const student = await updateStudent(editingId, payload);
+        setStudents((prev) =>
+          prev.map((s) => (s.id === editingId ? student : s)),
+        );
+        resetForm();
+      } else {
+        const student = await addStudent(payload);
+        setStudents((prev) => [...prev, student]);
+        resetForm();
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -269,8 +355,12 @@ export default function StudentEntry() {
         {/* New student form */}
         <Card>
           <CardHeader
-            title="Add New Student"
-            subtitle="Fill in the details below to enroll a student."
+            title={editingId ? "Edit Student" : "Add New Student"}
+            subtitle={
+              editingId
+                ? `Updating ${editingId}. Save to apply changes.`
+                : "Fill in the details below to enroll a student."
+            }
           />
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
@@ -440,14 +530,30 @@ export default function StudentEntry() {
               />
             </div>
 
-            <Button
-              type="submit"
-              icon={UserPlus}
-              className="mt-2 w-full"
-              disabled={saving}
-            >
-              {saving ? "Saving…" : "Save Student"}
-            </Button>
+            <div className="mt-2 flex flex-col gap-2">
+              <Button
+                type="submit"
+                icon={UserPlus}
+                className="w-full"
+                disabled={saving}
+              >
+                {saving
+                  ? "Saving…"
+                  : editingId
+                    ? "Update Student"
+                    : "Save Student"}
+              </Button>
+              {editingId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => resetForm()}
+                >
+                  Cancel edit
+                </Button>
+              )}
+            </div>
             {error && <p className="text-sm text-rose-500">{error}</p>}
           </form>
         </Card>
@@ -455,7 +561,9 @@ export default function StudentEntry() {
         {/* Student list */}
         <Card>
           <CardHeader
-            title={`All Students (${students.length})`}
+            title={`All Students (${filteredStudents.length}${
+              search.trim() ? ` of ${students.length}` : ""
+            })`}
             subtitle="Search, edit, or remove student records."
             action={
               <div className="relative">
@@ -464,8 +572,10 @@ export default function StudentEntry() {
                   className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                 />
                 <input
-                  placeholder="Search…"
-                  className={`w-44 rounded-full border border-[#e2e8f0] bg-[#f1f5f9] py-1.5 pl-8 pr-3 text-sm text-slate-600 placeholder:text-slate-400 focus:border-[#0ea5e9] focus:bg-white focus:outline-none ${focusRing}`}
+                  value={search}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search name, ID, class…"
+                  className={`w-52 rounded-full border border-[#e2e8f0] bg-[#f1f5f9] py-1.5 pl-8 pr-3 text-sm text-slate-600 placeholder:text-slate-400 focus:border-[#0ea5e9] focus:bg-white focus:outline-none ${focusRing}`}
                 />
               </div>
             }
@@ -475,6 +585,10 @@ export default function StudentEntry() {
             <div className="flex flex-col items-center py-12 text-center text-slate-400">
               <GraduationCap size={28} className="mb-2" />
               No students yet — add your first one.
+            </div>
+          ) : filteredStudents.length === 0 ? (
+            <div className="flex flex-col items-center py-12 text-center text-slate-400">
+              No students match “{search.trim()}”.
             </div>
           ) : (
             <Table
@@ -490,7 +604,7 @@ export default function StudentEntry() {
                 "",
               ]}
             >
-              {students.map((s) => (
+              {filteredStudents.map((s) => (
                 <tr
                   key={s.id}
                   className="transition-colors hover:bg-[#f1f5f9]/60"
@@ -514,18 +628,17 @@ export default function StudentEntry() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       <button
+                        type="button"
                         aria-label="Edit student"
+                        onClick={() => startEdit(s)}
                         className={`rounded-md p-1.5 text-slate-400 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${focusRing}`}
                       >
                         <Pencil size={14} />
                       </button>
                       <button
+                        type="button"
                         aria-label="Remove student"
-                        onClick={() =>
-                          setStudents((list) =>
-                            list.filter((x) => x.id !== s.id),
-                          )
-                        }
+                        onClick={() => handleDelete(s)}
                         className={`rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 ${focusRing}`}
                       >
                         <Trash2 size={14} />

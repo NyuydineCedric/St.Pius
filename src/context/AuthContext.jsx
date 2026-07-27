@@ -1,5 +1,12 @@
 import React, { createContext, useState, useContext, useEffect } from "react";
-import { login as apiLogin, register as apiRegister } from "../utils/api";
+import {
+  login as apiLogin,
+  register as apiRegister,
+  logout as apiLogout,
+  setToken,
+  getToken,
+  AUTH_EXPIRED_EVENT,
+} from "../utils/api";
 
 const AuthContext = createContext();
 
@@ -8,21 +15,36 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check localStorage for existing session
     const storedUser = localStorage.getItem("userData");
-    if (storedUser) {
+    const token = getToken();
+    if (storedUser && token) {
       setUser(JSON.parse(storedUser));
+    } else {
+      localStorage.removeItem("userData");
+      localStorage.removeItem("userRole");
+      setToken(null);
     }
     setLoading(false);
   }, []);
 
+  // Keep React auth state in sync when an API call gets 401.
+  useEffect(() => {
+    const onExpired = () => setUser(null);
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
   const login = async (email, password) => {
     const data = await apiLogin(email, password);
+    if (!data.token) {
+      throw new Error("Login did not return a session token");
+    }
+    setToken(data.token);
     const userData = {
       id: data.id,
       name: data.name,
       email: data.email,
-      role: data.role, // 'admin' or 'teacher'
+      role: data.role,
     };
 
     localStorage.setItem("userData", JSON.stringify(userData));
@@ -35,7 +57,13 @@ export function AuthProvider({ children }) {
     return apiRegister(name, email, password, role);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await apiLogout();
+    } catch {
+      /* ignore network errors on logout */
+    }
+    setToken(null);
     localStorage.removeItem("userData");
     localStorage.removeItem("userRole");
     setUser(null);

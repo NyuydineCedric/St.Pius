@@ -1,5 +1,6 @@
 const { app, BrowserWindow } = require("electron");
 const { spawn } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const http = require("http");
 
@@ -30,12 +31,31 @@ const BACKEND_DIR = isPackaged
 const PUBLIC_DIR = path.join(BACKEND_DIR, "public");
 
 // Path to the Java executable.
-//  - Dev: rely on system Java already being on PATH.
-//  - Packaged: use the JRE bundled inside the app (resources/jre/bin/java.exe,
-//    matching the folder jlink actually produced).
+//  - Dev: system `java` on PATH.
+//  - Packaged: prefer the OS-matched binary under resources/jre/bin/.
+//    The repo currently ships a Windows jlink image (java.exe). Linux/mac
+//    packages should replace `jre/` with a platform jlink output, or we
+//    fall back to system Java.
 function resolveJavaBinary() {
   if (!isPackaged) return "java";
-  return path.join(process.resourcesPath, "jre", "bin", "java.exe");
+
+  const binDir = path.join(process.resourcesPath, "jre", "bin");
+  const candidates =
+    process.platform === "win32"
+      ? ["java.exe", "java"]
+      : ["java", "java.exe"];
+
+  for (const name of candidates) {
+    const candidate = path.join(binDir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  console.warn(
+    "[electron] Bundled JRE binary not found for",
+    process.platform,
+    "— falling back to system java on PATH. Bundle a matching jlink JRE under jre/ for offline installs.",
+  );
+  return "java";
 }
 
 function startJavaBackend() {
@@ -48,7 +68,7 @@ function startJavaBackend() {
 
   // No "shell: true" here — critical. With a shell, arguments are joined
   // into one string without escaping, so any path containing a space
-  // (e.g. "C:\Users\Nyuydine Cedric\...") silently splits into multiple
+  // (e.g. "C:\\Users\\Nyuydine Cedric\\...") silently splits into multiple
   // arguments. Passing the args array directly to spawn keeps each
   // argument intact regardless of spaces.
   javaProcess = spawn(
@@ -73,7 +93,7 @@ function waitForBackend(retries = 30) {
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
       http
-        .get("http://localhost:8080/api/health", (res) => {
+        .get("http://127.0.0.1:8080/api/health", (res) => {
           if (res.statusCode === 200) resolve();
           else retryOrFail(remaining);
         })
@@ -100,6 +120,8 @@ async function createWindow() {
     title: "Report Card Management System",
     webPreferences: {
       contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
     },
   });
 
@@ -107,7 +129,7 @@ async function createWindow() {
     await waitForBackend();
     // Load through the backend itself (same origin as /api/*), not as a
     // file:// page — otherwise relative API calls won't resolve correctly.
-    mainWindow.loadURL("http://localhost:8080");
+    mainWindow.loadURL("http://127.0.0.1:8080");
   } catch (err) {
     console.error(err.message);
     mainWindow.loadURL(

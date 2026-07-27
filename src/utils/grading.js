@@ -13,16 +13,20 @@ export function gradeForScale(mark, scale) {
 }
 
 export function statusForScale(average, scale) {
+  if (average === "" || average === null || Number.isNaN(Number(average)))
+    return "—";
   const s = Number(scale) || 20;
-  const pct = average / s;
+  const pct = Number(average) / s;
   if (pct >= 0.5) return "Pass";
   if (pct >= 0.4) return "Trial";
   return "Fail";
 }
 
 export function remarkForScale(average, scale) {
+  if (average === "" || average === null || Number.isNaN(Number(average)))
+    return "—";
   const s = Number(scale) || 20;
-  const pct = average / s;
+  const pct = Number(average) / s;
   if (pct >= 0.8) return "Excellent";
   if (pct >= 0.7) return "Very Good";
   if (pct >= 0.6) return "Good";

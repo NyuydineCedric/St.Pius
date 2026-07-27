@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -19,7 +19,7 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { focusRing } from "./ui";
 import logo from "../assets/logo.jpg";
-import { getSettings } from "../utils/api";
+import { getSettings, getStudents, getActivities, getTeachers } from "../utils/api";
 
 // Admin navigation
 const adminNavItems = [
@@ -49,6 +49,60 @@ const sequenceOrder = [
   "Sequence 5",
   "Sequence 6",
 ];
+
+const notifIconByType = {
+  Student: UserPlus,
+  Marks: PenSquare,
+  "Report Card": FileText,
+  Class: Users,
+  Staff: GraduationCap,
+  Account: Users,
+};
+
+function lastSeenKey(userId) {
+  return `notificationsLastSeen:${userId || "anon"}`;
+}
+
+/**
+ * Teachers only see activity about their assigned classes (marks/reports)
+ * or staff notes that name them — not admin school-management noise.
+ */
+function filterNotificationsForUser(list, user, teacherCtx) {
+  if (!Array.isArray(list)) return [];
+  if (user?.role !== "teacher") return list;
+
+  const classes = teacherCtx?.classes || [];
+  const name = (teacherCtx?.name || "").trim();
+
+  return list.filter((n) => {
+    const text = n.text || "";
+    if (n.type === "Marks" || n.type === "Report Card") {
+      if (classes.length === 0) return false;
+      return classes.some((cls) => text.includes(cls));
+    }
+    if (n.type === "Staff" && name) {
+      return text.includes(name);
+    }
+    return false;
+  });
+}
+
+function relativeTime(timestamp) {
+  const diffMs = Date.now() - timestamp;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return "Just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay === 1) return "Yesterday";
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return new Date(timestamp).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+  });
+}
 
 function getTermProgress(settings) {
   if (!settings) return null;
@@ -95,6 +149,16 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [settings, setSettings] = useState(null);
+  const [headerSearch, setHeaderSearch] = useState("");
+  const [allStudents, setAllStudents] = useState([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchWrapRef = useRef(null);
+  const [notifications, setNotifications] = useState([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [lastSeen, setLastSeen] = useState(0);
+  const [panelBaseline, setPanelBaseline] = useState(null);
+  const notifWrapRef = useRef(null);
+  const [teacherCtx, setTeacherCtx] = useState({ name: "", classes: [] });
 
   useEffect(() => {
     getSettings()
@@ -103,6 +167,176 @@ export default function Layout() {
         // Widget just won't render if settings can't be loaded.
       });
   }, []);
+
+  // Teachers: load assigned classes so the bell can hide admin-only noise.
+  useEffect(() => {
+    if (user?.role !== "teacher" || !user?.email) {
+      setTeacherCtx({ name: "", classes: [] });
+      return;
+    }
+    getTeachers()
+      .then((list) => {
+        const mine = list.find(
+          (t) => t.email?.trim().toLowerCase() === user.email.trim().toLowerCase(),
+        );
+        if (!mine) {
+          setTeacherCtx({ name: "", classes: [] });
+          return;
+        }
+        setTeacherCtx({
+          name: mine.name || "",
+          classes: [
+            ...new Set((mine.assignments || []).map((a) => a.class).filter(Boolean)),
+          ],
+        });
+      })
+      .catch(() => setTeacherCtx({ name: "", classes: [] }));
+  }, [user?.role, user?.email]);
+
+  // Keep header search results fresh when navigating between pages.
+  useEffect(() => {
+    getStudents()
+      .then(setAllStudents)
+      .catch(() => {
+        /* header search stays empty if students can't load */
+      });
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setLastSeen(0);
+      return;
+    }
+    const key = lastSeenKey(user.id);
+    const raw = localStorage.getItem(key);
+    if (raw != null) {
+      setLastSeen(Number(raw) || 0);
+    } else {
+      // First visit: don't flood the badge with the whole activity history.
+      const now = Date.now();
+      localStorage.setItem(key, String(now));
+      setLastSeen(now);
+    }
+  }, [user?.id]);
+
+  const refreshNotifications = useCallback(() => {
+    getActivities()
+      .then((list) => setNotifications(Array.isArray(list) ? list : []))
+      .catch(() => {
+        /* bell stays empty if activities can't load */
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshNotifications();
+    const id = setInterval(refreshNotifications, 30_000);
+    return () => clearInterval(id);
+  }, [location.pathname, refreshNotifications]);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (
+        searchWrapRef.current &&
+        !searchWrapRef.current.contains(e.target)
+      ) {
+        setSearchOpen(false);
+      }
+      if (notifWrapRef.current && !notifWrapRef.current.contains(e.target)) {
+        setNotifOpen(false);
+        setPanelBaseline(null);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const headerMatches = useMemo(() => {
+    const q = headerSearch.trim().toLowerCase();
+    if (!q) return [];
+    return allStudents
+      .filter((s) =>
+        `${s.name} ${s.id} ${s.class}`.toLowerCase().includes(q),
+      )
+      .slice(0, 8);
+  }, [allStudents, headerSearch]);
+
+  const visibleNotifications = useMemo(
+    () => filterNotificationsForUser(notifications, user, teacherCtx),
+    [notifications, user, teacherCtx],
+  );
+
+  const recentNotifications = useMemo(
+    () => visibleNotifications.slice(0, 8),
+    [visibleNotifications],
+  );
+
+  const unreadCount = useMemo(
+    () =>
+      visibleNotifications.filter((n) => (n.timestamp || 0) > lastSeen).length,
+    [visibleNotifications, lastSeen],
+  );
+
+  function markNotificationsSeen(list = visibleNotifications) {
+    const maxTs = list.reduce(
+      (max, n) => Math.max(max, n.timestamp || 0),
+      Date.now(),
+    );
+    setLastSeen(maxTs);
+    if (user?.id) {
+      localStorage.setItem(lastSeenKey(user.id), String(maxTs));
+    }
+  }
+
+  function toggleNotifications() {
+    const opening = !notifOpen;
+    setNotifOpen(opening);
+    setSearchOpen(false);
+    if (opening) {
+      setPanelBaseline(lastSeen);
+      getActivities()
+        .then((list) => {
+          const next = Array.isArray(list) ? list : [];
+          setNotifications(next);
+          markNotificationsSeen(
+            filterNotificationsForUser(next, user, teacherCtx),
+          );
+        })
+        .catch(() => {
+          markNotificationsSeen();
+        });
+    } else {
+      setPanelBaseline(null);
+    }
+  }
+
+  const studentsPath =
+    user?.role === "teacher" ? "/teacher/students" : "/admin/students";
+  const reportCardsPath =
+    user?.role === "teacher" ? "/teacher/report-cards" : "/admin/report-cards";
+  const activitiesPath =
+    user?.role === "admin" ? "/admin/activities" : null;
+
+  function goToStudentsSearch(query) {
+    const q = (query ?? headerSearch).trim();
+    setSearchOpen(false);
+    if (user?.role === "teacher") {
+      navigate(
+        q
+          ? `${studentsPath}?q=${encodeURIComponent(q)}`
+          : studentsPath,
+      );
+      return;
+    }
+    navigate(q ? `${studentsPath}?q=${encodeURIComponent(q)}` : studentsPath);
+  }
+
+  function openStudentReports(student) {
+    setSearchOpen(false);
+    setHeaderSearch("");
+    navigate(reportCardsPath, {
+      state: { className: student.class, studentId: student.id },
+    });
+  }
 
   const progress = getTermProgress(settings);
 
@@ -250,31 +484,152 @@ export default function Layout() {
             </div>
 
             <div className="flex flex-shrink-0 items-center gap-3">
-              <div className="group relative hidden md:block">
+              <div className="group relative hidden md:block" ref={searchWrapRef}>
                 <Search
                   size={16}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-[#0ea5e9]"
+                  className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-[#0ea5e9]"
                 />
                 <input
-                  type="text"
+                  type="search"
+                  value={headerSearch}
+                  onChange={(e) => {
+                    setHeaderSearch(e.target.value);
+                    setSearchOpen(true);
+                  }}
+                  onFocus={() => setSearchOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      goToStudentsSearch();
+                    }
+                    if (e.key === "Escape") setSearchOpen(false);
+                  }}
                   placeholder="Search students by name or ID…"
                   className="w-56 rounded-full border border-[#e2e8f0] bg-[#f1f5f9] py-2 pl-9 pr-4 text-sm text-slate-600 placeholder:text-slate-400 transition-all focus:w-64 focus:border-[#0ea5e9] focus:bg-white focus:shadow-[0_0_0_3px_rgba(14,165,233,0.15)] focus:outline-none"
                 />
+                {searchOpen && headerSearch.trim() && (
+                  <div className="absolute right-0 top-[calc(100%+6px)] z-50 w-80 overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-lg">
+                    {headerMatches.length === 0 ? (
+                      <p className="px-4 py-3 text-sm text-slate-400">
+                        No students match “{headerSearch.trim()}”
+                      </p>
+                    ) : (
+                      <ul className="max-h-72 overflow-y-auto py-1">
+                        {headerMatches.map((s) => (
+                          <li key={s.id}>
+                            <button
+                              type="button"
+                              onClick={() => openStudentReports(s)}
+                              className="flex w-full flex-col gap-0.5 px-4 py-2.5 text-left hover:bg-[#f1f5f9]"
+                            >
+                              <span className="text-sm font-medium text-[#1e3a8a]">
+                                {s.name}
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {s.id} · {s.class}
+                                {s.option ? ` · ${s.option}` : ""}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => goToStudentsSearch()}
+                      className="w-full border-t border-[#e2e8f0] px-4 py-2.5 text-left text-sm font-medium text-[#0ea5e9] hover:bg-[#f1f5f9]"
+                    >
+                      View all matches in Students
+                    </button>
+                  </div>
+                )}
               </div>
-              <button
-                aria-label="Notifications"
-                className={`relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 transition-colors hover:border-[#0ea5e9]/40 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${
-                  focusRing || ""
-                }`}
-              >
-                <Bell size={16} />
-                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[#0ea5e9] ring-2 ring-white" />
-              </button>
-              <button
-                onClick={handleLogout}
-                className={`flex flex-shrink-0 items-center gap-2 rounded-full border border-[#e2e8f0] py-1 pl-1 pr-3 transition-colors hover:bg-[#f1f5f9] ${
-                  focusRing || ""
-                }`}
+              <div className="relative" ref={notifWrapRef}>
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  aria-expanded={notifOpen}
+                  onClick={toggleNotifications}
+                  className={`relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 transition-colors hover:border-[#0ea5e9]/40 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${
+                    notifOpen ? "border-[#0ea5e9]/40 bg-[#0ea5e9]/10 text-[#0ea5e9]" : ""
+                  } ${focusRing || ""}`}
+                >
+                  <Bell size={16} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0ea5e9] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">
+                      {unreadCount > 9 ? "9+" : unreadCount}
+                    </span>
+                  )}
+                </button>
+                {notifOpen && (
+                  <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-lg sm:w-96">
+                    <div className="flex items-center justify-between border-b border-[#e2e8f0] px-4 py-3">
+                      <p className="text-sm font-semibold text-[#1e3a8a]">
+                        Notifications
+                      </p>
+                      <span className="text-xs text-slate-400">
+                        {visibleNotifications.length === 0
+                          ? "None yet"
+                          : `${visibleNotifications.length} total`}
+                      </span>
+                    </div>
+                    {recentNotifications.length === 0 ? (
+                      <p className="px-4 py-8 text-center text-sm text-slate-400">
+                        {user?.role === "teacher"
+                          ? "No updates for your classes yet. Save marks or print a report card to see them here."
+                          : "No activity yet. Enrol a student, enter marks, or print a report card to see updates here."}
+                      </p>
+                    ) : (
+                      <ul className="max-h-80 overflow-y-auto">
+                        {recentNotifications.map((item, i) => {
+                          const Icon = notifIconByType[item.type] || FileText;
+                          const unreadCutoff =
+                            panelBaseline != null ? panelBaseline : lastSeen;
+                          const isUnread = (item.timestamp || 0) > unreadCutoff;
+                          return (
+                            <li
+                              key={`${item.timestamp}-${i}`}
+                              className={`flex items-start gap-3 border-b border-[#e2e8f0]/70 px-4 py-3 last:border-0 ${
+                                isUnread ? "bg-[#0ea5e9]/5" : "bg-white"
+                              }`}
+                            >
+                              <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#1e3a8a] text-[#0ea5e9]">
+                                <Icon size={14} />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm leading-snug text-[#1e293b]">
+                                  {item.text}
+                                </p>
+                                <p className="mt-0.5 text-xs text-slate-400">
+                                  {item.type}
+                                  {item.timestamp
+                                    ? ` · ${relativeTime(item.timestamp)}`
+                                    : ""}
+                                </p>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    {activitiesPath && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNotifOpen(false);
+                          navigate(activitiesPath);
+                        }}
+                        className="w-full border-t border-[#e2e8f0] px-4 py-2.5 text-left text-sm font-medium text-[#0ea5e9] hover:bg-[#f1f5f9]"
+                      >
+                        View all activity
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div
+                className="flex flex-shrink-0 items-center gap-2 rounded-full border border-[#e2e8f0] py-1 pl-1 pr-3"
+                title={user?.email || user?.name || "Signed in"}
               >
                 <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1e3a8a] font-mono text-xs font-semibold text-[#0ea5e9]">
                   {userInitials}
@@ -282,6 +637,17 @@ export default function Layout() {
                 <span className="hidden text-sm font-medium text-slate-600 md:inline">
                   {user?.name || "Admin"}
                 </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleLogout}
+                aria-label="Log out"
+                title="Log out"
+                className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 ${
+                  focusRing || ""
+                }`}
+              >
+                <LogOut size={16} />
               </button>
             </div>
           </header>

@@ -1,6 +1,6 @@
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import LoginPage from "./pages/auth/LoginPage";
 import RegisterPage from "./pages/auth/RegisterPage";
@@ -21,6 +21,14 @@ import Settings from "./pages/admin/Settings";
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
 import TeacherMarksEntry from "./pages/teacher/TeacherMarksEntry";
 import MyStudents from "./pages/teacher/MyStudents";
+
+function DashboardRedirect() {
+  const { user } = useAuth();
+  if (user?.role === "admin") return <Navigate to="/admin/dashboard" replace />;
+  if (user?.role === "teacher")
+    return <Navigate to="/teacher/dashboard" replace />;
+  return <Navigate to="/login" replace />;
+}
 
 export default function App() {
   return (
@@ -72,13 +80,7 @@ export default function App() {
           path="/dashboard"
           element={
             <ProtectedRoute>
-              {({ user }) => {
-                if (user?.role === "admin")
-                  return <Navigate to="/admin/dashboard" replace />;
-                if (user?.role === "teacher")
-                  return <Navigate to="/teacher/dashboard" replace />;
-                return <Navigate to="/login" replace />;
-              }}
+              <DashboardRedirect />
             </ProtectedRoute>
           }
         />

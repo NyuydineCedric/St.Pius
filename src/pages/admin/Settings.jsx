@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Save,
   UserCog,
@@ -9,6 +9,7 @@ import {
   X,
   Plus,
   GraduationCap,
+  Search,
 } from "lucide-react";
 import {
   Card,
@@ -31,7 +32,7 @@ import {
   getClasses,
   assignClassMaster,
 } from "../../utils/api";
-import { CLASS_NAMES, ALL_SUBJECTS } from "../../utils/subjects";
+import { ALL_SUBJECTS, compareClassNames } from "../../utils/subjects";
 
 function Toggle({ checked, onChange, label }) {
   return (
@@ -81,7 +82,7 @@ export default function Settings() {
   });
 
   const [structure, setStructure] = useState({
-    currentTerm: "Term 2",
+    currentTerm: "Second Term",
     currentSequence: "Sequence 4",
     academicYear: "",
     marksScale: "20",
@@ -100,6 +101,7 @@ export default function Settings() {
   const [assignDraft, setAssignDraft] = useState({}); // { [teacherId]: { class, subject } }
 
   const [classes, setClasses] = useState([]);
+  const [teacherSearch, setTeacherSearch] = useState("");
 
   useEffect(() => {
     Promise.all([getSettings(), getTeachers(), getClasses()])
@@ -124,11 +126,25 @@ export default function Settings() {
         setAutoLock(settings.autoLock);
         setPublicResults(settings.publicResults);
         setTeachers(teacherList);
-        setClasses(classList);
+        setClasses(
+          [...classList].sort((a, b) => compareClassNames(a.name, b.name)),
+        );
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  const filteredTeachers = useMemo(() => {
+    const q = teacherSearch.trim().toLowerCase();
+    if (!q) return teachers;
+    return teachers.filter((t) =>
+      `${t.name} ${t.id} ${t.email} ${t.phone} ${t.assignments
+        .map((a) => `${a.class} ${a.subject}`)
+        .join(" ")}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [teachers, teacherSearch]);
 
   function flashSaved(msg) {
     setSavedMsg(msg);
@@ -420,9 +436,9 @@ export default function Settings() {
                     setStructure((s) => ({ ...s, currentTerm: e.target.value }))
                   }
                 >
-                  <option>Term 1</option>
-                  <option>Term 2</option>
-                  <option>Term 3</option>
+                  <option>First Term</option>
+                  <option>Second Term</option>
+                  <option>Third Term</option>
                 </Select>
               </div>
               <div>
@@ -492,7 +508,7 @@ export default function Settings() {
             <Toggle
               checked={emailNotif}
               onChange={(v) => handleToggle("emailNotif", v, setEmailNotif)}
-              label="Email me when report cards are generated"
+              label="Email me when report cards are generated (coming soon — use the bell for in-app alerts)"
             />
             <Toggle
               checked={autoLock}
@@ -552,7 +568,25 @@ export default function Settings() {
         <CardHeader
           title="Staff Management"
           subtitle="Add teachers and assign them to classes and subjects."
-          action={<UserPlus size={18} className="text-slate-300" />}
+          action={
+            teachers.length > 0 ? (
+              <div className="relative">
+                <Search
+                  size={15}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  type="search"
+                  value={teacherSearch}
+                  onChange={(e) => setTeacherSearch(e.target.value)}
+                  placeholder="Search teachers…"
+                  className="w-52 rounded-full border border-[#e2e8f0] bg-[#f1f5f9] py-1.5 pl-8 pr-3 text-sm text-slate-600 placeholder:text-slate-400 focus:border-[#0ea5e9] focus:bg-white focus:outline-none"
+                />
+              </div>
+            ) : (
+              <UserPlus size={18} className="text-slate-300" />
+            )
+          }
         />
 
         <form
@@ -611,9 +645,13 @@ export default function Settings() {
           <div className="rounded-xl border border-dashed border-[#e2e8f0] py-10 text-center text-sm text-slate-400">
             No teachers added yet.
           </div>
+        ) : filteredTeachers.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[#e2e8f0] py-10 text-center text-sm text-slate-400">
+            No teachers match “{teacherSearch.trim()}”.
+          </div>
         ) : (
           <div className="flex flex-col gap-4">
-            {teachers.map((t) => {
+            {filteredTeachers.map((t) => {
               const draft = assignDraft[t.id] || { class: "", subject: "" };
               return (
                 <div
@@ -678,8 +716,10 @@ export default function Settings() {
                       className="sm:max-w-[160px]"
                     >
                       <option value="">Class…</option>
-                      {CLASS_NAMES.map((c) => (
-                        <option key={c}>{c}</option>
+                      {classes.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.name}
+                        </option>
                       ))}
                     </Select>
                     <Select

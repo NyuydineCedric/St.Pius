@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save, CheckCircle2 } from "lucide-react";
+import { Save, CheckCircle2, Search } from "lucide-react";
 import {
   Card,
   CardHeader,
@@ -43,6 +43,7 @@ export default function TeacherMarksEntry() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [marksScale, setMarksScale] = useState(20);
+  const [rosterSearch, setRosterSearch] = useState("");
 
   // Identify the logged-in teacher's staff record. AuthContext only gives
   // us the login account (user.id / user.email from the "users" table),
@@ -105,6 +106,14 @@ export default function TeacherMarksEntry() {
   }, []);
 
   const sequences = termSequences[term] || [];
+
+  const visibleRoster = useMemo(() => {
+    const q = rosterSearch.trim().toLowerCase();
+    if (!q) return roster;
+    return roster.filter((s) =>
+      `${s.name} ${s.id}`.toLowerCase().includes(q),
+    );
+  }, [roster, rosterSearch]);
 
   // Load the roster for the selected class, then filter down to only the
   // students who actually study this subject (Science/Arts streaming,
@@ -183,12 +192,10 @@ export default function TeacherMarksEntry() {
         const cleaned = {};
         roster.forEach((s) => {
           const v = seqMarks[s.id];
-          if (
-            v !== undefined &&
-            v !== "" &&
-            v !== null &&
-            !Number.isNaN(Number(v))
-          ) {
+          if (v === undefined) return;
+          if (v === "" || v === null) {
+            cleaned[s.id] = null; // clear previously saved mark
+          } else if (!Number.isNaN(Number(v))) {
             cleaned[s.id] = clampMark(v);
           }
         });
@@ -249,6 +256,7 @@ export default function TeacherMarksEntry() {
               onChange={(e) => {
                 setClassName(e.target.value);
                 setSubjectName("");
+                setRosterSearch("");
               }}
             >
               <option value="">-- Select a class --</option>
@@ -310,11 +318,28 @@ export default function TeacherMarksEntry() {
               : "Select a class and subject above to begin."
           }
           action={
-            saved && (
-              <span className="flex items-center gap-1 text-sm font-medium text-[#10b981]">
-                <CheckCircle2 size={16} /> Saved
-              </span>
-            )
+            <div className="flex items-center gap-3">
+              {className && subjectName && roster.length > 0 && (
+                <div className="relative">
+                  <Search
+                    size={15}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    type="search"
+                    value={rosterSearch}
+                    onChange={(e) => setRosterSearch(e.target.value)}
+                    placeholder="Filter students…"
+                    className="w-44 rounded-full border border-[#e2e8f0] bg-[#f1f5f9] py-1.5 pl-8 pr-3 text-sm text-slate-600 placeholder:text-slate-400 focus:border-[#0ea5e9] focus:bg-white focus:outline-none"
+                  />
+                </div>
+              )}
+              {saved && (
+                <span className="flex items-center gap-1 text-sm font-medium text-[#10b981]">
+                  <CheckCircle2 size={16} /> Saved
+                </span>
+              )}
+            </div>
           }
         />
 
@@ -332,10 +357,14 @@ export default function TeacherMarksEntry() {
           <div className="rounded-xl border border-dashed border-[#e2e8f0] py-10 text-center text-sm text-slate-400">
             No students in {className} currently offer {subjectName}.
           </div>
+        ) : visibleRoster.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[#e2e8f0] py-10 text-center text-sm text-slate-400">
+            No students match “{rosterSearch.trim()}”.
+          </div>
         ) : (
           <form onSubmit={handleSave}>
             <Table columns={["Student ID", "Student Name", ...sequences]}>
-              {roster.map((s) => (
+              {visibleRoster.map((s) => (
                 <tr
                   key={s.id}
                   className="transition-colors hover:bg-[#f1f5f9]/60"

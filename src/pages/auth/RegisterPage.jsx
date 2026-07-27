@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Mail,
@@ -12,17 +12,32 @@ import {
   Users,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { getAuthStatus } from "../../utils/api";
 
 const RegisterPage = () => {
   const navigate = useNavigate();
   const { register } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("teacher");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [bootstrapAdmin, setBootstrapAdmin] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
+  const [agreed, setAgreed] = useState(false);
+
+  useEffect(() => {
+    getAuthStatus()
+      .then((s) => {
+        const needsAdmin = Boolean(s.bootstrapAdmin || !s.hasAdmin);
+        setBootstrapAdmin(needsAdmin);
+      })
+      .catch(() => {
+        setBootstrapAdmin(false);
+      })
+      .finally(() => setStatusLoaded(true));
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -38,10 +53,15 @@ const RegisterPage = () => {
       return;
     }
 
+    if (!agreed) {
+      setError("Please agree to the Terms & Conditions");
+      return;
+    }
+
     setLoading(true);
     try {
-      await register(name, email, password, role);
-      // After registration, redirect to login
+      const submitRole = bootstrapAdmin ? "admin" : "teacher";
+      await register(name, email, password, submitRole);
       navigate("/login");
     } catch (err) {
       setError(err.message || "Registration failed. Please try again");
@@ -49,56 +69,7 @@ const RegisterPage = () => {
       setLoading(false);
     }
   };
-  const RoleSelection = () => (
-    <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-3">
-        <button
-          type="button"
-          onClick={() => setRole("teacher")}
-          className={`p-1 rounded-md border-2 transition-all ${
-            role === "teacher"
-              ? "border-[#2563EB] bg-blue-50"
-              : "border-[#E2E8F0] hover:border-[#94A3B8]"
-          }`}
-        >
-          <div className="flex flex-col items-center gap-1">
-            <Users
-              className={`w-5 h-5 ${role === "teacher" ? "text-[#2563EB]" : "text-[#64748B]"}`}
-            />
-            <span
-              className={`text-sm font-medium ${role === "teacher" ? "text-[#2563EB]" : "text-[#0F172A]"}`}
-            >
-              Teacher
-            </span>
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={() => setRole("admin")}
-          className={`p-1 rounded-md border-2 transition-all ${
-            role === "admin"
-              ? "border-[#2563EB] bg-blue-50"
-              : "border-[#E2E8F0] hover:border-[#94A3B8]"
-          }`}
-        >
-          <div className="flex flex-col items-center">
-            <Shield
-              className={`w-4 h-4 ${
-                role === "admin" ? "text-[#2563EB]" : "text-[#64748B]"
-              }`}
-            />
-            <p
-              className={`text-sm font-medium ${
-                role === "admin" ? "text-[#2563EB]" : "text-[#0F172A]"
-              }`}
-            >
-              Administrator
-            </p>
-          </div>
-        </button>
-      </div>
-    </div>
-  );
+
   return (
     <div className="min-h-screen items-center bg-[#e8eef9]  justify-center flex px-4 py-8 relative  overflow:hidden">
       <div className="absolute inset-0">
@@ -120,7 +91,9 @@ const RegisterPage = () => {
             Create Account
           </h2>
           <p className="text-[#64748B] text-sm">
-            Join us and start managing <br /> report cards effortlessly
+            {bootstrapAdmin
+              ? "Set up the first administrator for this school"
+              : "Register as a teacher to join your school"}
           </p>
         </div>
         {error && (
@@ -129,7 +102,27 @@ const RegisterPage = () => {
             {error}
           </div>
         )}
-        <RoleSelection />
+        {statusLoaded && (
+          <div className="mb-3 p-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC]">
+            <div className="flex items-center gap-2 justify-center">
+              {bootstrapAdmin ? (
+                <>
+                  <Shield className="w-4 h-4 text-[#2563EB]" />
+                  <span className="text-sm font-medium text-[#2563EB]">
+                    Administrator (first account)
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Users className="w-4 h-4 text-[#2563EB]" />
+                  <span className="text-sm font-medium text-[#2563EB]">
+                    Teacher account
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="text-sm font-semibold text-[#0F172A]">Name</label>
@@ -191,17 +184,21 @@ const RegisterPage = () => {
             <div className="flex gap-2 items-center mt-3 mb-3">
               <input
                 type="checkbox"
+                checked={agreed}
+                onChange={(e) => setAgreed(e.target.checked)}
                 className="focus:outline-blue-600 border-blue-600"
               />
               <p className="text-sm">
                 I agree to the{" "}
-                <span className="text-blue-600">Terms & Conditions</span>
+                <Link to="/terms" className="text-blue-600">
+                  Terms & Conditions
+                </Link>
               </p>
             </div>
           </div>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !statusLoaded}
             className="w-full py-2 rounded-xs cursor-pointer bg-[#155cf4] text-white font-semibol transition flex items-center justify-center gap-2"
           >
             {loading ? "Processing..." : <>Register</>}
