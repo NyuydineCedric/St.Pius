@@ -8,6 +8,9 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import java.io.*;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
@@ -1919,9 +1922,51 @@ public class Main {
         }
 
         PostgresDataStore(String url) {
-            // JDBC needs the "jdbc:" prefix; Supabase gives you a plain
-            // "postgresql://" string, so add it if it's missing.
-            this.url = url.startsWith("jdbc:") ? url : "jdbc:" + url;
+            this.url = normalizeJdbcUrl(url);
+        }
+
+        // Render/Supabase/Heroku-style connection strings look like
+        // "postgres://user:pass@host:5432/db?sslmode=require" — the plain
+        // "postgresql://user:pass@host/db" JDBC URL form does NOT support
+        // embedded "user:pass@" credentials, so we rewrite them into
+        // "jdbc:postgresql://host:5432/db?user=..&password=..&sslmode=require".
+        // Already-correct jdbc: URLs pass through unchanged (idempotent).
+        private static String normalizeJdbcUrl(String raw) {
+            String u = raw.trim();
+            String withoutJdbc = u.startsWith("jdbc:") ? u.substring("jdbc:".length()) : u;
+            try {
+                URI uri = new URI(withoutJdbc);
+                if (uri.getHost() == null) {
+                    return u.startsWith("jdbc:") ? u : "jdbc:" + u;
+                }
+                int port = uri.getPort() == -1 ? 5432 : uri.getPort();
+                String path = uri.getPath() == null ? "" : uri.getPath();
+
+                StringBuilder params = new StringBuilder();
+                String userInfo = uri.getUserInfo();
+                if (userInfo != null && !userInfo.isBlank()) {
+                    String[] parts = userInfo.split(":", 2);
+                    String user = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
+                    String pass = parts.length > 1 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "";
+                    params.append("user=").append(URLEncoder.encode(user, StandardCharsets.UTF_8))
+                            .append("&password=").append(URLEncoder.encode(pass, StandardCharsets.UTF_8));
+                }
+                String query = uri.getQuery();
+                if (query != null && !query.isBlank()) {
+                    if (params.length() > 0) params.append("&");
+                    params.append(query);
+                }
+                if (params.indexOf("sslmode=") == -1) {
+                    if (params.length() > 0) params.append("&");
+                    params.append("sslmode=require");
+                }
+
+                return "jdbc:postgresql://" + uri.getHost() + ":" + port + path
+                        + (params.length() > 0 ? "?" + params : "");
+            } catch (Exception e) {
+                // Not a parseable URI (unexpected format) — best effort fallback.
+                return u.startsWith("jdbc:") ? u : "jdbc:" + u;
+            }
         }
 
         private Connection connect() throws SQLException {
