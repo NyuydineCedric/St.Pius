@@ -166,7 +166,7 @@ final class DemoSeed {
         for (String[] row : rows) {
             // name, gender, guardian, phone, dob
             out.add(store.addStudent(row[0], className, row[1], row[2], row[3], row[4],
-                    option == null ? "" : option, electives == null ? "" : electives));
+                    option == null ? "" : option, electives == null ? "" : electives, ""));
         }
         return out;
     }

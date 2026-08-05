@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Save,
   UserCog,
   School,
   CalendarRange,
-  SlidersHorizontal,
+  Stamp,
+  Camera,
+  PenTool,
   UserPlus,
   X,
   Plus,
@@ -33,29 +35,16 @@ import {
   assignClassMaster,
 } from "../../utils/api";
 import { ALL_SUBJECTS, compareClassNames } from "../../utils/subjects";
-
-function Toggle({ checked, onChange, label }) {
-  return (
-    <label className="flex cursor-pointer items-center justify-between gap-4 py-2">
-      <span className="text-sm text-slate-600">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors ${
-          checked ? "bg-[#10b981]" : "bg-slate-300"
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-            checked ? "translate-x-[22px]" : "translate-x-0.5"
-          }`}
-        />
-      </button>
-    </label>
-  );
-}
+import { fileToCompressedDataUrl } from "../../utils/image";
+import {
+  SCHOOL_NAME,
+  SCHOOL_CODE,
+  SCHOOL_REGION,
+  SCHOOL_TOWN,
+  SCHOOL_DIVISION,
+  SCHOOL_MOTTO,
+  SCHOOL_AGENCY,
+} from "../../utils/schoolInfo";
 
 function initials(name) {
   return name
@@ -71,25 +60,26 @@ export default function Settings() {
   const [error, setError] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
 
-  const [schoolInfo, setSchoolInfo] = useState({
-    schoolName: "",
-    schoolCode: "",
-    region: "",
-    schoolTown: "",
-    regionalDelegation: "",
-    subDivision: "",
-    motto: "",
-  });
-
   const [structure, setStructure] = useState({
     currentTerm: "Second Term",
     currentSequence: "Sequence 4",
     academicYear: "",
     marksScale: "20",
+    passAverage: "50",
+    nextTermBegins: "",
   });
-  const [emailNotif, setEmailNotif] = useState(true);
-  const [autoLock, setAutoLock] = useState(false);
-  const [publicResults, setPublicResults] = useState(false);
+
+  // Principal's stamp/signature — uploaded once here, printed on every
+  // report card. Stored as compressed data URLs, same approach as student
+  // photos.
+  const [principalStamp, setPrincipalStamp] = useState("");
+  const [principalSignature, setPrincipalSignature] = useState("");
+  const [stampError, setStampError] = useState("");
+  const [signatureError, setSignatureError] = useState("");
+  const [stampLoading, setStampLoading] = useState(false);
+  const [signatureLoading, setSignatureLoading] = useState(false);
+  const stampInputRef = useRef(null);
+  const signatureInputRef = useRef(null);
 
   const [teachers, setTeachers] = useState([]);
   const [teacherForm, setTeacherForm] = useState({
@@ -106,25 +96,16 @@ export default function Settings() {
   useEffect(() => {
     Promise.all([getSettings(), getTeachers(), getClasses()])
       .then(([settings, teacherList, classList]) => {
-        setSchoolInfo({
-          schoolName: settings.schoolName,
-          schoolCode: settings.schoolCode,
-          region: settings.region,
-          schoolTown: settings.schoolTown,
-          regionalDelegation: settings.regionalDelegation,
-          subDivision: settings.subDivision,
-          motto: settings.motto,
-        });
-
         setStructure({
           currentTerm: settings.currentTerm,
           currentSequence: settings.currentSequence,
           academicYear: settings.academicYear,
           marksScale: settings.marksScale,
+          passAverage: settings.passAverage || "50",
+          nextTermBegins: settings.nextTermBegins || "",
         });
-        setEmailNotif(settings.emailNotif);
-        setAutoLock(settings.autoLock);
-        setPublicResults(settings.publicResults);
+        setPrincipalStamp(settings.principalStamp || "");
+        setPrincipalSignature(settings.principalSignature || "");
         setTeachers(teacherList);
         setClasses(
           [...classList].sort((a, b) => compareClassNames(a.name, b.name)),
@@ -151,15 +132,6 @@ export default function Settings() {
     setTimeout(() => setSavedMsg(""), 2000);
   }
 
-  async function handleSaveSchoolInfo() {
-    try {
-      await saveSettings(schoolInfo);
-      flashSaved("School information saved.");
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
   async function handleSaveStructure() {
     try {
       await saveSettings(structure);
@@ -169,10 +141,65 @@ export default function Settings() {
     }
   }
 
-  async function handleToggle(key, value, setter) {
-    setter(value);
+  function triggerStampPicker() {
+    stampInputRef.current?.click();
+  }
+
+  function triggerSignaturePicker() {
+    signatureInputRef.current?.click();
+  }
+
+  async function handleStampSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setStampError("");
+    setStampLoading(true);
     try {
-      await saveSettings({ [key]: value });
+      const dataUrl = await fileToCompressedDataUrl(file, { maxDimension: 300 });
+      setPrincipalStamp(dataUrl);
+      await saveSettings({ principalStamp: dataUrl });
+      flashSaved("Stamp saved.");
+    } catch (err) {
+      setStampError(err.message || "Could not save that image.");
+    } finally {
+      setStampLoading(false);
+    }
+  }
+
+  async function handleSignatureSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setSignatureError("");
+    setSignatureLoading(true);
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file, { maxDimension: 300 });
+      setPrincipalSignature(dataUrl);
+      await saveSettings({ principalSignature: dataUrl });
+      flashSaved("Signature saved.");
+    } catch (err) {
+      setSignatureError(err.message || "Could not save that image.");
+    } finally {
+      setSignatureLoading(false);
+    }
+  }
+
+  async function removeStamp() {
+    setPrincipalStamp("");
+    setStampError("");
+    try {
+      await saveSettings({ principalStamp: "" });
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function removeSignature() {
+    setPrincipalSignature("");
+    setSignatureError("");
+    try {
+      await saveSettings({ principalSignature: "" });
     } catch (err) {
       setError(err.message);
     }
@@ -292,7 +319,7 @@ export default function Settings() {
     <>
       <PageHeading
         title="Settings"
-        subtitle="Manage school information, academic structure, and system preferences."
+        subtitle="Academic structure, staff, and the principal's stamp & signature."
         action={
           savedMsg && (
             <span className="text-sm font-medium text-[#10b981]">
@@ -308,113 +335,57 @@ export default function Settings() {
       )}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        {/* School info */}
+        {/* School info — fixed, not editable from the UI. Only a developer
+            changing src/utils/schoolInfo.js can update these. */}
         <Card>
           <CardHeader
             title="School Information"
-            subtitle="Shown on report cards and headers"
+            subtitle="Shown on report cards and headers — set by the developer, not editable here"
             action={<School size={18} className="text-slate-300" />}
           />
-          <div className="flex flex-col gap-4">
-            <div>
-              <Label htmlFor="schoolName">School Name</Label>
-              <Input
-                id="schoolName"
-                value={schoolInfo.schoolName}
-                onChange={(e) =>
-                  setSchoolInfo((s) => ({ ...s, schoolName: e.target.value }))
-                }
-              />
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-dashed border-[#e2e8f0] bg-[#f8fafc] p-4 text-sm">
+            <div className="col-span-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Agency
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_AGENCY}</p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="code">School Code</Label>
-                <Input
-                  id="code"
-                  value={schoolInfo.schoolCode}
-                  onChange={(e) =>
-                    setSchoolInfo((s) => ({ ...s, schoolCode: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="region">Region</Label>
-                <Input
-                  id="region"
-                  value={schoolInfo.region}
-                  onChange={(e) =>
-                    setSchoolInfo((s) => ({ ...s, region: e.target.value }))
-                  }
-                />
-              </div>
+            <div className="col-span-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                School Name
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_NAME}</p>
             </div>
             <div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="schoolTown">School Town</Label>
-                  <Input
-                    id="schoolTown"
-                    placeholder="e.g. Bamenda"
-                    value={schoolInfo.schoolTown}
-                    onChange={(e) =>
-                      setSchoolInfo((s) => ({
-                        ...s,
-                        schoolTown: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="regionalDelegation">
-                    Regional Delegation
-                  </Label>
-                  <Input
-                    id="regionalDelegation"
-                    placeholder="e.g. Regional Delegation for North West"
-                    value={schoolInfo.regionalDelegation}
-                    onChange={(e) =>
-                      setSchoolInfo((s) => ({
-                        ...s,
-                        regionalDelegation: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="subDivision">
-                  Sub-Division / Sub-Inspectorate
-                </Label>
-                <Input
-                  id="subDivision"
-                  placeholder="e.g. Sub-Inspectorate for Bamenda"
-                  value={schoolInfo.subDivision}
-                  onChange={(e) =>
-                    setSchoolInfo((s) => ({
-                      ...s,
-                      subDivision: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <Label htmlFor="motto">Motto</Label>
-              <Input
-                id="motto"
-                placeholder="e.g. Faith, Discipline, Excellence"
-                value={schoolInfo.motto}
-                onChange={(e) =>
-                  setSchoolInfo((s) => ({ ...s, motto: e.target.value }))
-                }
-              />
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                School Code
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_CODE}</p>
             </div>
-            <Button
-              icon={Save}
-              className="mt-1 self-start"
-              onClick={handleSaveSchoolInfo}
-            >
-              Save Changes
-            </Button>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Region
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_REGION}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                School Town
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_TOWN}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Division
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_DIVISION}</p>
+            </div>
+            <div className="col-span-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Motto
+              </p>
+              <p className="font-medium text-[#1e3a8a]">{SCHOOL_MOTTO}</p>
+            </div>
           </div>
         </Card>
 
@@ -426,7 +397,7 @@ export default function Settings() {
             action={<CalendarRange size={18} className="text-slate-300" />}
           />
           <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Label htmlFor="term">Current Term</Label>
                 <Select
@@ -459,7 +430,7 @@ export default function Settings() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Label htmlFor="year">Academic Year</Label>
                 <Input
@@ -487,6 +458,42 @@ export default function Settings() {
                 </Select>
               </div>
             </div>
+            <div>
+              <Label htmlFor="passAverage">Pass Average (%)</Label>
+              <Input
+                id="passAverage"
+                type="number"
+                min="0"
+                max="100"
+                placeholder="e.g. 50"
+                value={structure.passAverage}
+                onChange={(e) =>
+                  setStructure((s) => ({ ...s, passAverage: e.target.value }))
+                }
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                The minimum percentage of the marks scale a student needs to
+                pass a subject or the term — used on report cards school-wide.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="nextTermBegins">Next Term Begins</Label>
+              <Input
+                id="nextTermBegins"
+                type="date"
+                value={structure.nextTermBegins}
+                onChange={(e) =>
+                  setStructure((s) => ({
+                    ...s,
+                    nextTermBegins: e.target.value,
+                  }))
+                }
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Printed on report cards as "Next Term: …" once the current
+                term is closed.
+              </p>
+            </div>
             <Button
               icon={Save}
               className="mt-1 self-start"
@@ -497,31 +504,117 @@ export default function Settings() {
           </div>
         </Card>
 
-        {/* Preferences */}
+        {/* Principal's stamp & signature */}
         <Card>
           <CardHeader
-            title="System Preferences"
-            subtitle="Notifications and access behavior"
-            action={<SlidersHorizontal size={18} className="text-slate-300" />}
+            title="Principal's Stamp & Signature"
+            subtitle="Printed on every report card's signature line"
+            action={<Stamp size={18} className="text-slate-300" />}
           />
-          <div className="divide-y divide-dashed divide-[#e2e8f0]">
-            <Toggle
-              checked={emailNotif}
-              onChange={(v) => handleToggle("emailNotif", v, setEmailNotif)}
-              label="Email me when report cards are generated (coming soon — use the bell for in-app alerts)"
-            />
-            <Toggle
-              checked={autoLock}
-              onChange={(v) => handleToggle("autoLock", v, setAutoLock)}
-              label="Auto-lock marks entry after sequence closes"
-            />
-            <Toggle
-              checked={publicResults}
-              onChange={(v) =>
-                handleToggle("publicResults", v, setPublicResults)
-              }
-              label="Allow guardians to view results online"
-            />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <Label>Stamp</Label>
+              <div className="flex items-center gap-3">
+                <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
+                  {principalStamp ? (
+                    <img
+                      src={principalStamp}
+                      alt="Stamp preview"
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <Stamp size={22} className="text-slate-300" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    icon={Camera}
+                    onClick={triggerStampPicker}
+                    disabled={stampLoading}
+                  >
+                    {stampLoading
+                      ? "Saving…"
+                      : principalStamp
+                        ? "Change"
+                        : "Upload"}
+                  </Button>
+                  {principalStamp && (
+                    <button
+                      type="button"
+                      onClick={removeStamp}
+                      className="text-left text-xs font-medium text-slate-400 hover:text-rose-500"
+                    >
+                      Remove
+                    </button>
+                  )}
+                  <input
+                    ref={stampInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleStampSelected}
+                  />
+                </div>
+              </div>
+              {stampError && (
+                <p className="mt-1.5 text-xs text-rose-500">{stampError}</p>
+              )}
+            </div>
+
+            <div>
+              <Label>Signature</Label>
+              <div className="flex items-center gap-3">
+                <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
+                  {principalSignature ? (
+                    <img
+                      src={principalSignature}
+                      alt="Signature preview"
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <PenTool size={22} className="text-slate-300" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    icon={Camera}
+                    onClick={triggerSignaturePicker}
+                    disabled={signatureLoading}
+                  >
+                    {signatureLoading
+                      ? "Saving…"
+                      : principalSignature
+                        ? "Change"
+                        : "Upload"}
+                  </Button>
+                  {principalSignature && (
+                    <button
+                      type="button"
+                      onClick={removeSignature}
+                      className="text-left text-xs font-medium text-slate-400 hover:text-rose-500"
+                    >
+                      Remove
+                    </button>
+                  )}
+                  <input
+                    ref={signatureInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleSignatureSelected}
+                  />
+                </div>
+              </div>
+              {signatureError && (
+                <p className="mt-1.5 text-xs text-rose-500">
+                  {signatureError}
+                </p>
+              )}
+            </div>
           </div>
         </Card>
 

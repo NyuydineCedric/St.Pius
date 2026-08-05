@@ -12,6 +12,7 @@ import TermsConditions from "./pages/TermsConditions";
 import Layout from "./components/Layout";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import StudentEntry from "./pages/admin/StudentEntry";
+import StudentCards from "./pages/admin/StudentCards";
 import MarksEntry from "./pages/admin/MarksEntry";
 import Classes from "./pages/admin/Classes";
 import ReportCards from "./pages/admin/ReportCards";
@@ -53,6 +54,7 @@ export default function App() {
         >
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/admin/students" element={<StudentEntry />} />
+          <Route path="/admin/student-cards" element={<StudentCards />} />
           <Route path="/admin/marks" element={<MarksEntry />} />
           <Route path="/admin/classes" element={<Classes />} />
           <Route path="/admin/report-cards" element={<ReportCards />} />

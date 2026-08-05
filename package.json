@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "backend": "bash scripts/start-backend.sh",
     "seed:demo": "node scripts/seed-demo.mjs",
+    "seed:random-marks": "node scripts/seed-random-marks.mjs",
     "stage:backend": "bash scripts/stage-backend.sh",
     "dist": "npm run stage:backend && electron-builder"
   },

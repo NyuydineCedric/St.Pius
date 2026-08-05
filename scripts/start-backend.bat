@@ -1,6 +1,6 @@
 @echo off
 REM Compile and run the Java API (Windows). Prefer scripts\start-backend.sh on Git Bash.
-setlocal
+setlocal EnableDelayedExpansion
 cd /d "%~dp0.."
 set SRC=backend\src\main\java
 set OUT=backend\bin
@@ -12,7 +12,15 @@ if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%DATA%" mkdir "%DATA%"
 if not exist "%PUBLIC%" mkdir "%PUBLIC%"
 
-dir /s /b "%SRC%\*.java" > "%OUT%\sources.txt"
+REM javac's @argfile parser treats backslash as an escape character, which
+REM mangles ordinary Windows paths (e.g. "\r" gets read as carriage return).
+REM Writing paths with forward slashes instead sidesteps that entirely —
+REM Windows/javac accept forward slashes in file paths just fine.
+if exist "%OUT%\sources.txt" del "%OUT%\sources.txt"
+for /f "delims=" %%f in ('dir /s /b "%SRC%\*.java"') do (
+  set "srcfile=%%f"
+  echo "!srcfile:\=/!">> "%OUT%\sources.txt"
+)
 javac -d "%OUT%" @"%OUT%\sources.txt"
 if errorlevel 1 exit /b 1
 

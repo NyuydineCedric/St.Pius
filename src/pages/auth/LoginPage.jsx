@@ -57,7 +57,7 @@ const LoginPage = () => {
           }}
         ></div>
       </div>
-      <div className="border absolute bg-white md:w-88 border-white p-8 rounded-xs shadow-xl">
+      <div className="relative border bg-white w-full max-w-sm border-white p-6 sm:p-8 rounded-xs shadow-xl">
         <div className="cursor-pointer" onClick={() => navigate(-1)}>
           <ArrowLeft className="w-5 h-5 text-[#64748B] hover:text-[#2563EB] transition" />
         </div>

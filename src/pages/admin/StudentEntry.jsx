@@ -11,6 +11,8 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
+  Camera,
+  User,
 } from "lucide-react";
 import {
   Card,
@@ -43,6 +45,7 @@ import {
   SIXTH_FORM_MAX_SUBJECTS,
 } from "../../utils/subjects";
 import { parseStudentsExcel, downloadTemplate } from "../../utils/excelImport";
+import { fileToCompressedDataUrl } from "../../utils/image";
 
 export default function StudentEntry() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -58,10 +61,14 @@ export default function StudentEntry() {
     phone: "",
     option: "",
     electives: [],
+    photo: "",
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [photoError, setPhotoError] = useState("");
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const photoInputRef = useRef(null);
 
   // Bulk import state
   const fileInputRef = useRef(null);
@@ -145,6 +152,7 @@ export default function StudentEntry() {
 
   function resetForm(classList = classes) {
     setEditingId(null);
+    setPhotoError("");
     setForm({
       name: "",
       dob: "",
@@ -154,12 +162,14 @@ export default function StudentEntry() {
       phone: "",
       option: "",
       electives: [],
+      photo: "",
     });
   }
 
   function startEdit(student) {
     setEditingId(student.id);
     setError("");
+    setPhotoError("");
     setForm({
       name: student.name || "",
       dob: student.dob && student.dob !== "—" ? student.dob : "",
@@ -171,8 +181,35 @@ export default function StudentEntry() {
       electives: student.electives
         ? student.electives.split(",").map((s) => s.trim()).filter(Boolean)
         : [],
+      photo: student.photo || "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function triggerPhotoPicker() {
+    photoInputRef.current?.click();
+  }
+
+  async function handlePhotoSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    setPhotoError("");
+    setPhotoLoading(true);
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file);
+      update("photo", dataUrl);
+    } catch (err) {
+      setPhotoError(err.message || "Could not process that image.");
+    } finally {
+      setPhotoLoading(false);
+    }
+  }
+
+  function removePhoto() {
+    update("photo", "");
+    setPhotoError("");
   }
 
   async function handleDelete(student) {
@@ -218,6 +255,7 @@ export default function StudentEntry() {
       dob: form.dob || "—",
       option: streamRequired ? form.option : "",
       electives: streamRequired ? form.electives.join(",") : "",
+      photo: form.photo || "",
     };
     try {
       if (editingId) {
@@ -364,6 +402,57 @@ export default function StudentEntry() {
           />
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
+              <Label>Photo</Label>
+              <div className="flex items-center gap-4">
+                <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
+                  {form.photo ? (
+                    <img
+                      src={form.photo}
+                      alt="Student preview"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <User size={28} className="text-slate-300" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    icon={Camera}
+                    onClick={triggerPhotoPicker}
+                    disabled={photoLoading}
+                  >
+                    {photoLoading
+                      ? "Processing…"
+                      : form.photo
+                        ? "Change photo"
+                        : "Upload photo"}
+                  </Button>
+                  {form.photo && (
+                    <button
+                      type="button"
+                      onClick={removePhoto}
+                      className="text-left text-xs font-medium text-slate-400 hover:text-rose-500"
+                    >
+                      Remove photo
+                    </button>
+                  )}
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handlePhotoSelected}
+                  />
+                </div>
+              </div>
+              {photoError && (
+                <p className="mt-1.5 text-xs text-rose-500">{photoError}</p>
+              )}
+            </div>
+
+            <div>
               <Label htmlFor="name">Full Name</Label>
               <Input
                 id="name"
@@ -374,7 +463,7 @@ export default function StudentEntry() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Label htmlFor="dob">Date of Birth</Label>
                 <Input
@@ -613,7 +702,20 @@ export default function StudentEntry() {
                     {s.id}
                   </td>
                   <td className="px-4 py-3 font-medium text-[#1e3a8a]">
-                    {s.name}
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#e2e8f0] bg-[#f1f5f9]">
+                        {s.photo ? (
+                          <img
+                            src={s.photo}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <User size={14} className="text-slate-300" />
+                        )}
+                      </div>
+                      {s.name}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-slate-600">{s.class}</td>
                   <td className="px-4 py-3 text-slate-600">

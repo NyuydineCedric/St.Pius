@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -15,16 +21,25 @@ import {
   ChevronLeft,
   GraduationCap,
   LogOut,
+  IdCard,
+  Menu,
+  X,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { focusRing } from "./ui";
 import logo from "../assets/logo.jpg";
-import { getSettings, getStudents, getActivities, getTeachers } from "../utils/api";
+import {
+  getSettings,
+  getStudents,
+  getActivities,
+  getTeachers,
+} from "../utils/api";
 
 // Admin navigation
 const adminNavItems = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
   { label: "Student Entry", icon: UserPlus, path: "/admin/students" },
+  { label: "Student Cards", icon: IdCard, path: "/admin/student-cards" },
   { label: "Marks Entry", icon: PenSquare, path: "/admin/marks" },
   { label: "Classes", icon: Users, path: "/admin/classes" },
   { label: "Report Cards", icon: FileText, path: "/admin/report-cards" },
@@ -148,6 +163,9 @@ export default function Layout() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
+  // Sidebar becomes an off-canvas drawer below the lg breakpoint — closed
+  // by default so it doesn't eat the whole screen on phones/tablets.
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [settings, setSettings] = useState(null);
   const [headerSearch, setHeaderSearch] = useState("");
   const [allStudents, setAllStudents] = useState([]);
@@ -168,6 +186,12 @@ export default function Layout() {
       });
   }, []);
 
+  // Close the mobile drawer whenever the route changes (e.g. after tapping
+  // a nav link), so it doesn't stay open over the new page.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
   // Teachers: load assigned classes so the bell can hide admin-only noise.
   useEffect(() => {
     if (user?.role !== "teacher" || !user?.email) {
@@ -177,7 +201,8 @@ export default function Layout() {
     getTeachers()
       .then((list) => {
         const mine = list.find(
-          (t) => t.email?.trim().toLowerCase() === user.email.trim().toLowerCase(),
+          (t) =>
+            t.email?.trim().toLowerCase() === user.email.trim().toLowerCase(),
         );
         if (!mine) {
           setTeacherCtx({ name: "", classes: [] });
@@ -186,7 +211,9 @@ export default function Layout() {
         setTeacherCtx({
           name: mine.name || "",
           classes: [
-            ...new Set((mine.assignments || []).map((a) => a.class).filter(Boolean)),
+            ...new Set(
+              (mine.assignments || []).map((a) => a.class).filter(Boolean),
+            ),
           ],
         });
       })
@@ -235,10 +262,7 @@ export default function Layout() {
 
   useEffect(() => {
     function onDocClick(e) {
-      if (
-        searchWrapRef.current &&
-        !searchWrapRef.current.contains(e.target)
-      ) {
+      if (searchWrapRef.current && !searchWrapRef.current.contains(e.target)) {
         setSearchOpen(false);
       }
       if (notifWrapRef.current && !notifWrapRef.current.contains(e.target)) {
@@ -254,9 +278,7 @@ export default function Layout() {
     const q = headerSearch.trim().toLowerCase();
     if (!q) return [];
     return allStudents
-      .filter((s) =>
-        `${s.name} ${s.id} ${s.class}`.toLowerCase().includes(q),
-      )
+      .filter((s) => `${s.name} ${s.id} ${s.class}`.toLowerCase().includes(q))
       .slice(0, 8);
   }, [allStudents, headerSearch]);
 
@@ -313,18 +335,13 @@ export default function Layout() {
     user?.role === "teacher" ? "/teacher/students" : "/admin/students";
   const reportCardsPath =
     user?.role === "teacher" ? "/teacher/report-cards" : "/admin/report-cards";
-  const activitiesPath =
-    user?.role === "admin" ? "/admin/activities" : null;
+  const activitiesPath = user?.role === "admin" ? "/admin/activities" : null;
 
   function goToStudentsSearch(query) {
     const q = (query ?? headerSearch).trim();
     setSearchOpen(false);
     if (user?.role === "teacher") {
-      navigate(
-        q
-          ? `${studentsPath}?q=${encodeURIComponent(q)}`
-          : studentsPath,
-      );
+      navigate(q ? `${studentsPath}?q=${encodeURIComponent(q)}` : studentsPath);
       return;
     }
     navigate(q ? `${studentsPath}?q=${encodeURIComponent(q)}` : studentsPath);
@@ -368,17 +385,42 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-[#f1f5f9] font-sans text-[#1e293b] antialiased">
       <div className="flex min-h-screen">
-        {/* ---------- Sidebar ---------- */}
+        {/* Dimmed backdrop behind the mobile drawer — tap to close. Only
+            ever rendered below the lg breakpoint. */}
+        {mobileOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+            onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+
+        {/* ---------- Sidebar ----------
+            Below lg: fixed off-canvas drawer, slid in/out with mobileOpen.
+            At lg and up: a normal, always-visible flex column that can
+            still collapse to icon-only width via `collapsed`. */}
         <aside
-          className={`relative flex flex-shrink-0 flex-col bg-gradient-to-b from-[#1e3a8a] to-[#1d4ed8] shadow-xl transition-all duration-200 ${
-            collapsed ? "w-20" : "w-64"
-          }`}
+          className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-shrink-0 flex-col bg-gradient-to-b from-[#1e3a8a] to-[#1d4ed8] shadow-xl transition-transform duration-200 lg:relative lg:z-auto lg:translate-x-0 lg:transition-[width] ${
+            mobileOpen ? "translate-x-0" : "-translate-x-full"
+          } ${collapsed ? "lg:w-20" : "lg:w-64"}`}
         >
-          {/* Collapse toggle */}
+          {/* Mobile-only close button */}
+          <button
+            onClick={() => setMobileOpen(false)}
+            aria-label="Close menu"
+            className={`absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-slate-300 hover:bg-white/10 hover:text-white lg:hidden ${
+              focusRing || ""
+            }`}
+          >
+            <X size={18} />
+          </button>
+
+          {/* Collapse toggle — desktop only; on mobile the drawer is either
+              fully open or fully closed, so icon-only collapsing doesn't apply. */}
           <button
             onClick={() => setCollapsed((c) => !c)}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`absolute -right-3 top-8 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#1e3a8a] text-slate-300 shadow-md transition-colors hover:bg-[#0ea5e9] hover:text-white ${
+            className={`absolute -right-3 top-8 hidden h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#1e3a8a] text-slate-300 shadow-md transition-colors hover:bg-[#0ea5e9] hover:text-white lg:flex ${
               focusRing || ""
             }`}
           >
@@ -399,7 +441,7 @@ export default function Layout() {
             {!collapsed && (
               <div className="min-w-0">
                 <div className="truncate text-lg font-bold leading-tight tracking-tight text-white">
-                  SCHOOL
+                  ST.PIUS X
                 </div>
                 <div className="truncate text-[11px] uppercase tracking-wider text-slate-400">
                   Records System
@@ -471,20 +513,35 @@ export default function Layout() {
         <div className="flex h-screen min-w-0 flex-1 flex-col">
           {/* Top bar — no longer needs "sticky"; it's naturally pinned
               since only the content below it scrolls, not the whole page. */}
-          <header className="flex flex-shrink-0 flex-col gap-3 border-b border-[#e2e8f0] bg-white/90 px-6 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <span>SCHOOL</span>
-                <ChevronRight size={12} />
-                <span className="font-medium text-[#0ea5e9]">{current}</span>
+          <header className="flex flex-shrink-0 flex-col gap-3 border-b border-[#e2e8f0] bg-white/90 px-4 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileOpen(true)}
+                aria-label="Open menu"
+                className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 hover:border-[#0ea5e9]/40 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] lg:hidden ${
+                  focusRing || ""
+                }`}
+              >
+                <Menu size={18} />
+              </button>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <span>SCHOOL</span>
+                  <ChevronRight size={12} />
+                  <span className="font-medium text-[#0ea5e9]">{current}</span>
+                </div>
+                <h1 className="truncate text-2xl font-bold tracking-tight text-[#1e3a8a]">
+                  {current}
+                </h1>
               </div>
-              <h1 className="truncate text-2xl font-bold tracking-tight text-[#1e3a8a]">
-                {current}
-              </h1>
             </div>
 
             <div className="flex flex-shrink-0 items-center gap-3">
-              <div className="group relative hidden md:block" ref={searchWrapRef}>
+              <div
+                className="group relative hidden md:block"
+                ref={searchWrapRef}
+              >
                 <Search
                   size={16}
                   className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-[#0ea5e9]"
@@ -544,6 +601,8 @@ export default function Layout() {
                   </div>
                 )}
               </div>
+              {/* Teachers don't get the notification bell — admin-only. */}
+              {user?.role !== "teacher" && (
               <div className="relative" ref={notifWrapRef}>
                 <button
                   type="button"
@@ -551,7 +610,9 @@ export default function Layout() {
                   aria-expanded={notifOpen}
                   onClick={toggleNotifications}
                   className={`relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 transition-colors hover:border-[#0ea5e9]/40 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${
-                    notifOpen ? "border-[#0ea5e9]/40 bg-[#0ea5e9]/10 text-[#0ea5e9]" : ""
+                    notifOpen
+                      ? "border-[#0ea5e9]/40 bg-[#0ea5e9]/10 text-[#0ea5e9]"
+                      : ""
                   } ${focusRing || ""}`}
                 >
                   <Bell size={16} />
@@ -627,6 +688,7 @@ export default function Layout() {
                   </div>
                 )}
               </div>
+              )}
               <div
                 className="flex flex-shrink-0 items-center gap-2 rounded-full border border-[#e2e8f0] py-1 pl-1 pr-3"
                 title={user?.email || user?.name || "Signed in"}
@@ -653,7 +715,7 @@ export default function Layout() {
           </header>
 
           {/* Routed page content — this is the ONLY thing that scrolls. */}
-          <main className="min-h-0 flex-1 overflow-y-auto overflow-x-auto px-6 py-6">
+          <main className="min-h-0 flex-1 overflow-y-auto overflow-x-auto px-4 py-6 sm:px-6">
             <Outlet />
             <footer className="mt-8 pb-4 text-center text-xs text-slate-400">
               SCHOOL Report Card &amp; Information System — Developed by

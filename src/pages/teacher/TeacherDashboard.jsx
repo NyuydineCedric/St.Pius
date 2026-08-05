@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   PenSquare,
-  FileText,
   GraduationCap,
   ChevronRight,
   BookOpen,
@@ -17,11 +16,6 @@ import { getSubjectsForStudent } from "../../utils/subjects";
 const quickActions = [
   { label: "Enter Marks", icon: PenSquare, to: "/teacher/marks" },
   { label: "View Students", icon: GraduationCap, to: "/teacher/students" },
-  {
-    label: "Generate Report Card",
-    icon: FileText,
-    to: "/teacher/report-cards",
-  },
 ];
 
 export default function TeacherDashboard() {
@@ -155,7 +149,7 @@ export default function TeacherDashboard() {
         <p className="mb-4 text-sm text-rose-500">{lookupError}</p>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
         {quickActions.map(({ label, icon: Icon, to }) => (
           <Link
             key={label}
@@ -188,7 +182,7 @@ export default function TeacherDashboard() {
               No classes assigned yet. Contact your administrator.
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-1 gap-4 mt-4 sm:grid-cols-2">
               {classes.map((className) => (
                 <Link
                   key={className}

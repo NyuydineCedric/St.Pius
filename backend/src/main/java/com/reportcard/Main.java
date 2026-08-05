@@ -604,7 +604,8 @@ public class Main {
                         obj.getOrDefault("phone", "—"),
                         obj.getOrDefault("dob", "—"),
                         obj.getOrDefault("option", ""),
-                        obj.getOrDefault("electives", ""));
+                        obj.getOrDefault("electives", ""),
+                        obj.getOrDefault("photo", ""));
                 store.save();
                 sendJson(exchange, 201, s.toJson());
                 return;
@@ -1054,6 +1055,9 @@ public class Main {
     static class Student implements Serializable {
         private static final long serialVersionUID = 1L;
         String id, name, className, gender, guardian, phone, dob, option, electives, status;
+        // Passport-style photo, stored as a data URL (e.g. "data:image/jpeg;base64,...").
+        // Resized/compressed client-side before upload, so this stays small.
+        String photo;
 
         Student(String id, String name, String className, String gender, String guardian, String phone, String dob,
                 String option, String electives) {
@@ -1067,13 +1071,14 @@ public class Main {
             this.option = option;
             this.electives = electives;
             this.status = "Active";
+            this.photo = "";
         }
 
         String toJson() {
             return String.format(Locale.ROOT,
-                    "{\"id\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\"}",
+                    "{\"id\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"photo\":\"%s\"}",
                     escape(id), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
-                    escape(dob), escape(option), escape(electives), escape(status));
+                    escape(dob), escape(option), escape(electives), escape(status), escape(photo));
         }
 
         private String escape(String s) {
@@ -1225,14 +1230,27 @@ public class Main {
         boolean emailNotif = true;
         boolean autoLock = false;
         boolean publicResults = false;
+        // Percentage (0-100) of the marks scale a student must reach to be
+        // considered a "Pass" — set by the principal, applied everywhere the
+        // app decides pass/fail (report card conduct box, papers passed/failed,
+        // GCE-style status).
+        String passAverage = "50";
+        // Data URLs ("data:image/...;base64,...") for the principal's stamp
+        // and signature, printed on the report card's signature line.
+        String principalStamp = "";
+        String principalSignature = "";
+        // Date (yyyy-MM-dd, from an <input type="date">) the next term
+        // begins — shown on the report card's "Next Term: …" line.
+        String nextTermBegins = "";
 
         String toJson() {
             return String.format(Locale.ROOT,
-                    "{\"schoolName\":\"%s\",\"schoolCode\":\"%s\",\"region\":\"%s\",\"schoolTown\":\"%s\",\"regionalDelegation\":\"%s\",\"subDivision\":\"%s\",\"motto\":\"%s\",\"currentTerm\":\"%s\",\"currentSequence\":\"%s\",\"academicYear\":\"%s\",\"marksScale\":\"%s\",\"emailNotif\":%b,\"autoLock\":%b,\"publicResults\":%b}",
+                    "{\"schoolName\":\"%s\",\"schoolCode\":\"%s\",\"region\":\"%s\",\"schoolTown\":\"%s\",\"regionalDelegation\":\"%s\",\"subDivision\":\"%s\",\"motto\":\"%s\",\"currentTerm\":\"%s\",\"currentSequence\":\"%s\",\"academicYear\":\"%s\",\"marksScale\":\"%s\",\"emailNotif\":%b,\"autoLock\":%b,\"publicResults\":%b,\"passAverage\":\"%s\",\"principalStamp\":\"%s\",\"principalSignature\":\"%s\",\"nextTermBegins\":\"%s\"}",
                     escape(schoolName), escape(schoolCode), escape(region), escape(schoolTown),
                     escape(regionalDelegation), escape(subDivision), escape(motto),
                     escape(currentTerm), escape(currentSequence), escape(academicYear), escape(marksScale),
-                    emailNotif, autoLock, publicResults);
+                    emailNotif, autoLock, publicResults, escape(passAverage), escape(principalStamp),
+                    escape(principalSignature), escape(nextTermBegins));
         }
 
         private String escape(String s) {
@@ -1256,7 +1274,7 @@ public class Main {
         List<ActivityEntry> getActivities();
 
         Student addStudent(String name, String className, String gender, String guardian,
-                String phone, String dob, String option, String electives);
+                String phone, String dob, String option, String electives, String photo);
 
         Student updateStudent(String id, Map<String, String> fields);
 
@@ -1328,6 +1346,10 @@ public class Main {
         public synchronized void init(File dataDir) {
             this.dataFile = new File(dataDir, "backend-data.ser");
             load();
+            if (savePending) {
+                savePending = false;
+                save();
+            }
         }
 
         @SuppressWarnings("unchecked")
@@ -1379,10 +1401,60 @@ public class Main {
                         if (!found)
                             classes.add(new ClassInfo(n));
                     }
+
+                    // One-time repair for data saved by earlier builds: addStudent()
+                    // below used to compute the "next" numeric ID against a prefix
+                    // ("SPXCC-") that never matched the actual ID format it wrote
+                    // ("SPXCCxxxx", no dash), so nextNumericId() always saw zero
+                    // matches and handed out "SPXCC0001" to every single student.
+                    // Every student sharing one ID meant their marks — which are
+                    // keyed by student ID — collapsed onto a single shared record,
+                    // which is why report cards looked identical across a class.
+                    // Give any duplicate a fresh, unique ID so the app behaves
+                    // correctly from here on.
+                    if (dedupeStudentIds()) {
+                        savePending = true;
+                    }
                 }
             } catch (Exception ex) {
                 System.err.println("Failed to load datastore: " + ex.getMessage());
             }
+        }
+
+        // Set by load() when it had to repair duplicate student IDs; init()
+        // saves once immediately afterward so the fix is persisted right away.
+        private boolean savePending = false;
+
+        /**
+         * Reassigns a fresh "SPXCCxxxx" ID to every student after the first
+         * one found holding a given ID. Returns true if anything changed.
+         */
+        private synchronized boolean dedupeStudentIds() {
+            int maxNum = 0;
+            for (Student s : students) {
+                if (s.id != null && s.id.startsWith("SPXCC")) {
+                    try {
+                        maxNum = Math.max(maxNum, Integer.parseInt(s.id.substring("SPXCC".length())));
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+            Set<String> seen = new HashSet<>();
+            boolean changed = false;
+            for (Student s : students) {
+                if (s.id != null && seen.add(s.id)) {
+                    continue; // first time we've seen this ID — keep it
+                }
+                String oldId = s.id;
+                maxNum++;
+                s.id = String.format("SPXCC%04d", maxNum);
+                seen.add(s.id);
+                changed = true;
+                System.err.println("FileDataStore: reassigned duplicate student ID " + oldId + " -> " + s.id
+                        + " (" + s.name + "). Re-check this student's marks — they may have been sharing"
+                        + " results with another student under the old ID.");
+            }
+            return changed;
         }
 
         @Override
@@ -1439,7 +1511,8 @@ public class Main {
             return new ArrayList<>(activities);
         }
 
-        private synchronized int nextNumericId(String prefix, List<? extends Object> items, java.util.function.Function<Object, String> idFn) {
+        private synchronized int nextNumericId(String prefix, List<? extends Object> items,
+                java.util.function.Function<Object, String> idFn) {
             int max = 0;
             for (Object item : items) {
                 String id = idFn.apply(item);
@@ -1455,9 +1528,15 @@ public class Main {
 
         @Override
         public synchronized Student addStudent(String name, String className, String gender, String guardian,
-                String phone, String dob, String option, String electives) {
-            String id = String.format("NCY-%04d", nextNumericId("NCY-", students, o -> ((Student) o).id));
+                String phone, String dob, String option, String electives, String photo) {
+            // Bug fix: the generated ID format is "SPXCCxxxx" (no dash), but this
+            // used to search for the prefix "SPXCC-", which never matched anything —
+            // so max was always 0 and every student got "SPXCC0001". That's why
+            // every student ended up sharing one ID (and, since marks are keyed by
+            // student ID, one shared set of marks). Search for the real prefix.
+            String id = String.format("SPXCC%04d", nextNumericId("SPXCC", students, o -> ((Student) o).id));
             Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
+            s.photo = photo == null ? "" : photo;
             students.add(s);
             boolean found = false;
             for (ClassInfo c : classes)
@@ -1503,6 +1582,8 @@ public class Main {
                 target.electives = fields.get("electives");
             if (fields.containsKey("status"))
                 target.status = fields.get("status");
+            if (fields.containsKey("photo"))
+                target.photo = fields.get("photo");
 
             if (!Objects.equals(oldClass, target.className)) {
                 for (ClassInfo c : classes) {
@@ -1783,6 +1864,14 @@ public class Main {
                 settings.autoLock = Boolean.parseBoolean(fields.get("autoLock"));
             if (fields.containsKey("publicResults"))
                 settings.publicResults = Boolean.parseBoolean(fields.get("publicResults"));
+            if (fields.containsKey("passAverage"))
+                settings.passAverage = fields.get("passAverage");
+            if (fields.containsKey("principalStamp"))
+                settings.principalStamp = fields.get("principalStamp");
+            if (fields.containsKey("principalSignature"))
+                settings.principalSignature = fields.get("principalSignature");
+            if (fields.containsKey("nextTermBegins"))
+                settings.nextTermBegins = fields.get("nextTermBegins");
             return settings;
         }
 
@@ -1878,8 +1967,10 @@ public class Main {
                         dob TEXT,
                         option_name TEXT,
                         electives TEXT,
-                        status TEXT DEFAULT 'Active'
+                        status TEXT DEFAULT 'Active',
+                        photo TEXT DEFAULT ''
                     );
+                    ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT DEFAULT '';
                     CREATE TABLE IF NOT EXISTS marks (
                         class_name TEXT NOT NULL,
                         subject TEXT NOT NULL,
@@ -1909,8 +2000,16 @@ public class Main {
                         marks_scale TEXT DEFAULT '20',
                         email_notif BOOLEAN DEFAULT TRUE,
                         auto_lock BOOLEAN DEFAULT FALSE,
-                        public_results BOOLEAN DEFAULT FALSE
+                        public_results BOOLEAN DEFAULT FALSE,
+                        pass_average TEXT DEFAULT '50',
+                        principal_stamp TEXT DEFAULT '',
+                        principal_signature TEXT DEFAULT '',
+                        next_term_begins TEXT DEFAULT ''
                     );
+                    ALTER TABLE settings ADD COLUMN IF NOT EXISTS pass_average TEXT DEFAULT '50';
+                    ALTER TABLE settings ADD COLUMN IF NOT EXISTS principal_stamp TEXT DEFAULT '';
+                    ALTER TABLE settings ADD COLUMN IF NOT EXISTS principal_signature TEXT DEFAULT '';
+                    ALTER TABLE settings ADD COLUMN IF NOT EXISTS next_term_begins TEXT DEFAULT '';
                     CREATE TABLE IF NOT EXISTS keep_alive (
                         id INT PRIMARY KEY DEFAULT 1,
                         pinged_at TIMESTAMPTZ DEFAULT now()
@@ -1999,15 +2098,15 @@ public class Main {
 
         @Override
         public Student addStudent(String name, String className, String gender, String guardian,
-                String phone, String dob, String option, String electives) {
+                String phone, String dob, String option, String electives, String photo) {
             try (Connection c = connect()) {
                 c.setAutoCommit(false);
                 try {
-                    String id = nextPrefixedId(c, "students", "NCY-");
+                    String id = nextPrefixedId(c, "students", "SPXCC-");
 
                     try (PreparedStatement ps = c.prepareStatement(
-                            "INSERT INTO students (id, name, class_name, gender, guardian, phone, dob, option_name, electives, status) "
-                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')")) {
+                            "INSERT INTO students (id, name, class_name, gender, guardian, phone, dob, option_name, electives, status, photo) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?)")) {
                         ps.setString(1, id);
                         ps.setString(2, name);
                         ps.setString(3, className);
@@ -2017,6 +2116,7 @@ public class Main {
                         ps.setString(7, dob);
                         ps.setString(8, option);
                         ps.setString(9, electives);
+                        ps.setString(10, photo == null ? "" : photo);
                         ps.executeUpdate();
                     }
 
@@ -2040,6 +2140,7 @@ public class Main {
 
                     c.commit();
                     Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
+                    s.photo = photo == null ? "" : photo;
                     logActivity("Student", "New student enrolled — " + name + " (" + className + ")");
                     return s;
                 } catch (SQLException e) {
@@ -2081,10 +2182,11 @@ public class Main {
                     String option = fields.getOrDefault("option", existing.option);
                     String electives = fields.getOrDefault("electives", existing.electives);
                     String status = fields.getOrDefault("status", existing.status);
+                    String photo = fields.getOrDefault("photo", existing.photo);
 
                     try (PreparedStatement ps = c.prepareStatement(
                             "UPDATE students SET name=?, class_name=?, gender=?, guardian=?, phone=?, dob=?, "
-                                    + "option_name=?, electives=?, status=? WHERE id=?")) {
+                                    + "option_name=?, electives=?, status=?, photo=? WHERE id=?")) {
                         ps.setString(1, name);
                         ps.setString(2, className);
                         ps.setString(3, gender);
@@ -2094,7 +2196,8 @@ public class Main {
                         ps.setString(7, option);
                         ps.setString(8, electives);
                         ps.setString(9, status);
-                        ps.setString(10, id);
+                        ps.setString(10, photo == null ? "" : photo);
+                        ps.setString(11, id);
                         ps.executeUpdate();
                     }
 
@@ -2125,6 +2228,7 @@ public class Main {
                     c.commit();
                     Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
                     s.status = status;
+                    s.photo = photo == null ? "" : photo;
                     logActivity("Student", "Student updated — " + name + " (" + id + ")");
                     return s;
                 } catch (SQLException e) {
@@ -2190,6 +2294,8 @@ public class Main {
                     rs.getString("gender"), rs.getString("guardian"), rs.getString("phone"), rs.getString("dob"),
                     rs.getString("option_name"), rs.getString("electives"));
             s.status = rs.getString("status");
+            String photo = rs.getString("photo");
+            s.photo = photo == null ? "" : photo;
             return s;
         }
 
@@ -2617,6 +2723,10 @@ public class Main {
                     s.emailNotif = rs.getBoolean("email_notif");
                     s.autoLock = rs.getBoolean("auto_lock");
                     s.publicResults = rs.getBoolean("public_results");
+                    s.passAverage = rs.getString("pass_average");
+                    s.principalStamp = rs.getString("principal_stamp");
+                    s.principalSignature = rs.getString("principal_signature");
+                    s.nextTermBegins = rs.getString("next_term_begins");
                 }
             } catch (SQLException e) {
                 System.err.println("getSettings failed: " + e.getMessage());
@@ -2655,12 +2765,21 @@ public class Main {
                 s.autoLock = Boolean.parseBoolean(fields.get("autoLock"));
             if (fields.containsKey("publicResults"))
                 s.publicResults = Boolean.parseBoolean(fields.get("publicResults"));
+            if (fields.containsKey("passAverage"))
+                s.passAverage = fields.get("passAverage");
+            if (fields.containsKey("principalStamp"))
+                s.principalStamp = fields.get("principalStamp");
+            if (fields.containsKey("principalSignature"))
+                s.principalSignature = fields.get("principalSignature");
+            if (fields.containsKey("nextTermBegins"))
+                s.nextTermBegins = fields.get("nextTermBegins");
 
             try (Connection c = connect();
                     PreparedStatement ps = c.prepareStatement(
                             "UPDATE settings SET school_name=?, school_code=?, region=?, school_town=?, "
                                     + "regional_delegation=?, sub_division=?, motto=?, current_term=?, current_sequence=?, "
-                                    + "academic_year=?, marks_scale=?, email_notif=?, auto_lock=?, public_results=? WHERE id = 1")) {
+                                    + "academic_year=?, marks_scale=?, email_notif=?, auto_lock=?, public_results=?, "
+                                    + "pass_average=?, principal_stamp=?, principal_signature=?, next_term_begins=? WHERE id = 1")) {
                 ps.setString(1, s.schoolName);
                 ps.setString(2, s.schoolCode);
                 ps.setString(3, s.region);
@@ -2675,6 +2794,10 @@ public class Main {
                 ps.setBoolean(12, s.emailNotif);
                 ps.setBoolean(13, s.autoLock);
                 ps.setBoolean(14, s.publicResults);
+                ps.setString(15, s.passAverage);
+                ps.setString(16, s.principalStamp);
+                ps.setString(17, s.principalSignature);
+                ps.setString(18, s.nextTermBegins);
                 ps.executeUpdate();
             } catch (SQLException e) {
                 throw new RuntimeException("updateSettings failed: " + e.getMessage(), e);
