@@ -38,8 +38,8 @@ const HelpCenter = () => {
       answer: "Report cards are automatically generated from the marks entered. Navigate to Report Cards, select a class and student, choose the term, and click 'Generate'. You can then print or download as PDF."
     },
     {
-      question: "What does the 'Sequence' mean?",
-      answer: "Each academic year is divided into 3 terms, and each term has 2 sequences (e.g., Term 1: Sequence 1 & 2). Marks are recorded per sequence to track student progress throughout the year."
+      question: "What does 'CAT' mean?",
+      answer: "CAT stands for Continuous Assessment Test. Each academic year is divided into 3 terms, and each term has 2 CATs (e.g., Term 1: CAT 1 & 2). Marks are recorded per CAT to track student progress throughout the year."
     },
     {
       question: "How do I change the school information?",
@@ -89,21 +89,29 @@ const HelpCenter = () => {
 
           {/* Quick Links */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-            <div className="bg-blue-50 rounded-xl p-4 text-center hover:bg-blue-100 transition cursor-pointer">
+            <Link to="/user-guide" className="bg-blue-50 rounded-xl p-4 text-center hover:bg-blue-100 transition cursor-pointer block">
               <BookOpen className="w-8 h-8 text-blue-600 mx-auto mb-2" />
               <h3 className="font-semibold text-gray-800">User Guide</h3>
               <p className="text-sm text-gray-600">Step-by-step documentation</p>
-            </div>
-            <div className="bg-green-50 rounded-xl p-4 text-center hover:bg-green-100 transition cursor-pointer">
+            </Link>
+            <a
+              href="https://wa.me/237678772649"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-green-50 rounded-xl p-4 text-center hover:bg-green-100 transition cursor-pointer block"
+            >
               <MessageCircle className="w-8 h-8 text-green-600 mx-auto mb-2" />
               <h3 className="font-semibold text-gray-800">Live Chat</h3>
-              <p className="text-sm text-gray-600">Chat with support team</p>
-            </div>
-            <div className="bg-purple-50 rounded-xl p-4 text-center hover:bg-purple-100 transition cursor-pointer">
+              <p className="text-sm text-gray-600">Chat with support on WhatsApp</p>
+            </a>
+            <a
+              href="mailto:nyuydinecedric@gmail.com"
+              className="bg-purple-50 rounded-xl p-4 text-center hover:bg-purple-100 transition cursor-pointer block"
+            >
               <Mail className="w-8 h-8 text-purple-600 mx-auto mb-2" />
               <h3 className="font-semibold text-gray-800">Email Support</h3>
-              <p className="text-sm text-gray-600">support@school.edu</p>
-            </div>
+              <p className="text-sm text-gray-600">nyuydinecedric@gmail.com</p>
+            </a>
           </div>
 
           {/* FAQ Section */}
@@ -143,16 +151,15 @@ const HelpCenter = () => {
               <div className="flex items-center gap-3">
                 <Phone className="text-blue-600" size={20} />
                 <div>
-                  <p className="text-sm text-gray-600">Phone Support</p>
-                  <p className="font-semibold text-gray-800">+237 675717944</p>
-                   <p className="font-semibold text-gray-800">+237 678772649</p>
+                  <p className="text-sm text-gray-600">Phone / WhatsApp</p>
+                  <p className="font-semibold text-gray-800">+237 678 772 649</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <Mail className="text-blue-600" size={20} />
                 <div>
                   <p className="text-sm text-gray-600">Email Support</p>
-                  <p className="font-semibold text-gray-800">bayebrian89@gmail.com</p>
+                  <p className="font-semibold text-gray-800">nyuydinecedric@gmail.com</p>
                 </div>
               </div>
             </div>

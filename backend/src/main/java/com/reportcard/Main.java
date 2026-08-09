@@ -74,6 +74,16 @@ public class Main {
                 sendJson(exchange, 401, "{\"error\":\"Unauthorized\"}");
                 return;
             }
+            // Re-check the account against the store on every request, not
+            // just at login — otherwise a teacher removed from staff (whose
+            // login account gets deleted alongside them) would stay signed
+            // in and able to use the dashboard until their token expires.
+            User liveUser = store.findUserByEmail(s.email);
+            if (liveUser == null || !Objects.equals(liveUser.role, s.role)) {
+                sessions.revoke(SessionStore.extractToken(exchange));
+                sendJson(exchange, 401, "{\"error\":\"Unauthorized\"}");
+                return;
+            }
             CURRENT.set(s);
             try {
                 handler.handle(exchange);
@@ -115,6 +125,12 @@ public class Main {
         }
         store.init(dataDir);
 
+        // Guarantee a known admin login always works, on every startup —
+        // a safe upsert (ensureUser) that never touches students, classes,
+        // marks, or other staff accounts.
+        store.ensureUser("Admin", "stpius@gmail.com", Passwords.hash("stpius123@"), "admin");
+        store.save();
+
         // Electron always spawns this process with no PORT env var set, so
         // the desktop build keeps using 8080 exactly as before. Render sets
         // its own PORT at runtime, which this now respects.
@@ -146,6 +162,7 @@ public class Main {
         server.createContext("/api/activities", requireAuth(new ActivitiesHandler()));
         server.createContext("/api/teachers", requireAuth(new TeachersHandler()));
         server.createContext("/api/settings", requireAuth(new SettingsHandler()));
+        server.createContext("/api/academic-years", requireAuth(new AcademicYearsHandler()));
         // Local/demo only: wipe + load GBHS Bamenda sample data.
         server.createContext("/api/demo/seed", withCors(new DemoSeedHandler()));
 
@@ -608,7 +625,8 @@ public class Main {
                         obj.getOrDefault("dob", "—"),
                         obj.getOrDefault("option", ""),
                         obj.getOrDefault("electives", ""),
-                        obj.getOrDefault("photo", ""));
+                        obj.getOrDefault("photo", ""),
+                        obj.getOrDefault("admittedOn", ""));
                 store.save();
                 sendJson(exchange, 201, s.toJson());
                 return;
@@ -759,9 +777,13 @@ public class Main {
                 String cls = qmap.getOrDefault("class", "");
                 String subject = qmap.getOrDefault("subject", "");
                 String sequence = qmap.getOrDefault("sequence", "");
+                // Optional — omit (or leave blank) to read the currently
+                // configured academic year. Student History / Mastersheet
+                // pass an explicit year to look back at prior years.
+                String academicYear = qmap.getOrDefault("academicYear", "");
                 // Reads are allowed for any logged-in user so report cards
                 // can assemble full subject sets. Writes stay assignment-scoped.
-                Map<String, Double> marks = store.getMarks(cls, subject, sequence);
+                Map<String, Double> marks = store.getMarks(academicYear, cls, subject, sequence);
                 StringBuilder sb = new StringBuilder();
                 sb.append('{');
                 boolean first = true;
@@ -788,7 +810,11 @@ public class Main {
                 Map<String, Double> sets = new HashMap<>();
                 Set<String> clears = new HashSet<>();
                 parseMarksPayload(body, sets, clears);
-                store.saveMarks(cls, subject, sequence, sets, clears);
+                // Writes always target the current academic year (null here
+                // resolves to settings.academicYear) — teachers can never
+                // accidentally overwrite a prior year's marks this way, and
+                // a new year always starts with nothing recorded.
+                store.saveMarks(null, cls, subject, sequence, sets, clears);
                 store.save();
                 sendJson(exchange, 200, "{\"status\":\"ok\"}");
                 return;
@@ -961,7 +987,21 @@ public class Main {
 
             if (parts.length == 4 && "DELETE".equalsIgnoreCase(method)) {
                 String teacherId = parts[3];
+                // Grab the email before deleting the staff record so we can
+                // also revoke their login account — otherwise they'd keep
+                // being able to sign in with credentials tied to a teacher
+                // profile that no longer exists.
+                String email = null;
+                for (Teacher t : store.getTeachers()) {
+                    if (t.id.equals(teacherId)) {
+                        email = t.email;
+                        break;
+                    }
+                }
                 store.deleteTeacher(teacherId);
+                if (email != null) {
+                    store.deleteTeacherAccountByEmail(email);
+                }
                 store.save();
                 sendJson(exchange, 200, "{\"status\":\"ok\"}");
                 return;
@@ -992,6 +1032,31 @@ public class Main {
                 return;
             }
             sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+        }
+    }
+
+    /**
+     * GET /api/academic-years — every academic year that has recorded
+     * marks, plus the currently configured one, sorted. Powers year
+     * pickers on Student History and Mastersheet.
+     */
+    static class AcademicYearsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            List<String> years = store.getAcademicYears();
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < years.size(); i++) {
+                if (i > 0)
+                    sb.append(',');
+                String y = years.get(i) == null ? "" : years.get(i);
+                sb.append('"').append(y.replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
+            }
+            sb.append(']');
+            sendJson(exchange, 200, sb.toString());
         }
     }
 
@@ -1061,6 +1126,10 @@ public class Main {
         // Passport-style photo, stored as a data URL (e.g. "data:image/jpeg;base64,...").
         // Resized/compressed client-side before upload, so this stays small.
         String photo;
+        // Date the student was admitted to the school, "yyyy-mm-dd" from a
+        // date input. Optional — blank for students entered before this field
+        // existed, or if the admin doesn't have the exact date on hand.
+        String admittedOn;
 
         Student(String id, String name, String className, String gender, String guardian, String phone, String dob,
                 String option, String electives) {
@@ -1075,13 +1144,14 @@ public class Main {
             this.electives = electives;
             this.status = "Active";
             this.photo = "";
+            this.admittedOn = "";
         }
 
         String toJson() {
             return String.format(Locale.ROOT,
-                    "{\"id\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"photo\":\"%s\"}",
+                    "{\"id\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"photo\":\"%s\",\"admittedOn\":\"%s\"}",
                     escape(id), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
-                    escape(dob), escape(option), escape(electives), escape(status), escape(photo));
+                    escape(dob), escape(option), escape(electives), escape(status), escape(photo), escape(admittedOn));
         }
 
         private String escape(String s) {
@@ -1277,7 +1347,7 @@ public class Main {
         List<ActivityEntry> getActivities();
 
         Student addStudent(String name, String className, String gender, String guardian,
-                String phone, String dob, String option, String electives, String photo);
+                String phone, String dob, String option, String electives, String photo, String admittedOn);
 
         Student updateStudent(String id, Map<String, String> fields);
 
@@ -1295,9 +1365,21 @@ public class Main {
 
         ClassInfo setClassMaster(String className, String teacherId);
 
-        void saveMarks(String cls, String subject, String sequence, Map<String, Double> sets, Set<String> clears);
+        /**
+         * Saves marks under a specific academic year. Pass null or "" to
+         * target whatever year is currently configured in settings — this
+         * is what live mark entry should always do, so a new academic year
+         * automatically starts every class/subject/sequence with a clean
+         * slate instead of overwriting a prior year's scores.
+         */
+        void saveMarks(String academicYear, String cls, String subject, String sequence, Map<String, Double> sets,
+                Set<String> clears);
 
-        Map<String, Double> getMarks(String cls, String subject, String sequence);
+        /** Pass null or "" for academicYear to read the current year's marks. */
+        Map<String, Double> getMarks(String academicYear, String cls, String subject, String sequence);
+
+        /** Every academic year that has recorded marks, plus the current one, sorted. */
+        List<String> getAcademicYears();
 
         Teacher addTeacher(String name, String email, String phone);
 
@@ -1308,6 +1390,14 @@ public class Main {
         void removeAssignment(String teacherId, String className, String subject);
 
         void deleteTeacher(String teacherId);
+
+        /**
+         * Deletes the login account for this email, but only if that
+         * account's role is "teacher" — guards against ever touching an
+         * admin account that happens to share an email with a removed
+         * teacher. Returns true if an account was actually deleted.
+         */
+        boolean deleteTeacherAccountByEmail(String email);
 
         User findUserByEmail(String email);
 
@@ -1342,7 +1432,16 @@ public class Main {
         private final List<Teacher> teachers = new ArrayList<>();
         private final List<User> users = new ArrayList<>();
         private SchoolSettings settings = new SchoolSettings();
+        // Legacy, pre-academic-year layout (class -> subject -> sequence ->
+        // studentId -> score). Only ever populated on load(), from data
+        // written before this field existed, then migrated into
+        // marksByYear and left empty from then on.
         private final Map<String, Map<String, Map<String, Map<String, Double>>>> marks = new HashMap<>();
+        // Current layout: academicYear -> class -> subject -> sequence ->
+        // studentId -> score. Keeps every year's marks around so switching
+        // settings.academicYear doesn't lose prior years' data, and a new
+        // year always starts with nothing recorded.
+        private final Map<String, Map<String, Map<String, Map<String, Map<String, Double>>>>> marksByYear = new HashMap<>();
         private File dataFile;
 
         @Override
@@ -1370,6 +1469,7 @@ public class Main {
                     Object s = m.get("students");
                     Object c = m.get("classes");
                     Object mk = m.get("marks");
+                    Object mky = m.get("marksByYear");
                     Object ac = m.get("activities");
                     Object tc = m.get("teachers");
                     Object us = m.get("users");
@@ -1377,6 +1477,7 @@ public class Main {
                     students.clear();
                     classes.clear();
                     marks.clear();
+                    marksByYear.clear();
                     activities.clear();
                     teachers.clear();
                     users.clear();
@@ -1386,6 +1487,8 @@ public class Main {
                         classes.addAll((List<ClassInfo>) c);
                     if (mk instanceof Map)
                         marks.putAll((Map) mk);
+                    if (mky instanceof Map)
+                        marksByYear.putAll((Map) mky);
                     if (ac instanceof List)
                         activities.addAll((List<ActivityEntry>) ac);
                     if (tc instanceof List)
@@ -1394,6 +1497,17 @@ public class Main {
                         users.addAll((List<User>) us);
                     if (st instanceof SchoolSettings)
                         settings = (SchoolSettings) st;
+
+                    // One-time migration: marks recorded before academic-year
+                    // scoping existed live in the old flat "marks" map — file
+                    // them under whatever academic year is currently
+                    // configured so they don't just disappear, then stop
+                    // touching the legacy field going forward.
+                    if (!marks.isEmpty() && marksByYear.isEmpty()) {
+                        marksByYear.put(settings.academicYear, new HashMap<>(marks));
+                        marks.clear();
+                        savePending = true;
+                    }
                     for (String n : Arrays.asList("Lower Sixth", "Upper Sixth")) {
                         boolean found = false;
                         for (ClassInfo ci : classes)
@@ -1469,7 +1583,7 @@ public class Main {
                     Map<String, Object> m = new HashMap<>();
                     m.put("students", new ArrayList<>(students));
                     m.put("classes", new ArrayList<>(classes));
-                    m.put("marks", new HashMap<>(marks));
+                    m.put("marksByYear", new HashMap<>(marksByYear));
                     m.put("activities", new ArrayList<>(activities));
                     m.put("teachers", new ArrayList<>(teachers));
                     m.put("users", new ArrayList<>(users));
@@ -1531,7 +1645,7 @@ public class Main {
 
         @Override
         public synchronized Student addStudent(String name, String className, String gender, String guardian,
-                String phone, String dob, String option, String electives, String photo) {
+                String phone, String dob, String option, String electives, String photo, String admittedOn) {
             // Bug fix: the generated ID format is "SPXCCxxxx" (no dash), but this
             // used to search for the prefix "SPXCC-", which never matched anything —
             // so max was always 0 and every student got "SPXCC0001". That's why
@@ -1540,6 +1654,7 @@ public class Main {
             String id = String.format("SPXCC%04d", nextNumericId("SPXCC", students, o -> ((Student) o).id));
             Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
             s.photo = photo == null ? "" : photo;
+            s.admittedOn = admittedOn == null ? "" : admittedOn;
             students.add(s);
             boolean found = false;
             for (ClassInfo c : classes)
@@ -1587,6 +1702,8 @@ public class Main {
                 target.status = fields.get("status");
             if (fields.containsKey("photo"))
                 target.photo = fields.get("photo");
+            if (fields.containsKey("admittedOn"))
+                target.admittedOn = fields.get("admittedOn");
 
             if (!Objects.equals(oldClass, target.className)) {
                 for (ClassInfo c : classes) {
@@ -1625,11 +1742,13 @@ public class Main {
                 if (c.name.equals(target.className) && c.students > 0)
                     c.students--;
             }
-            // Drop this student's marks everywhere.
-            for (Map<String, Map<String, Map<String, Double>>> bySubject : marks.values()) {
-                for (Map<String, Map<String, Double>> bySeq : bySubject.values()) {
-                    for (Map<String, Double> byStudent : bySeq.values()) {
-                        byStudent.remove(id);
+            // Drop this student's marks everywhere, across every academic year.
+            for (Map<String, Map<String, Map<String, Map<String, Double>>>> byClass : marksByYear.values()) {
+                for (Map<String, Map<String, Map<String, Double>>> bySubject : byClass.values()) {
+                    for (Map<String, Map<String, Double>> bySeq : bySubject.values()) {
+                        for (Map<String, Double> byStudent : bySeq.values()) {
+                            byStudent.remove(id);
+                        }
                     }
                 }
             }
@@ -1704,9 +1823,11 @@ public class Main {
         }
 
         @Override
-        public synchronized void saveMarks(String cls, String subject, String sequence, Map<String, Double> sets,
-                Set<String> clears) {
-            Map<String, Double> existing = marks
+        public synchronized void saveMarks(String academicYear, String cls, String subject, String sequence,
+                Map<String, Double> sets, Set<String> clears) {
+            String year = (academicYear == null || academicYear.isBlank()) ? settings.academicYear : academicYear;
+            Map<String, Double> existing = marksByYear
+                    .computeIfAbsent(year, k -> new HashMap<>())
                     .computeIfAbsent(cls, k -> new HashMap<>())
                     .computeIfAbsent(subject, k -> new HashMap<>())
                     .computeIfAbsent(sequence, k -> new HashMap<>());
@@ -1716,13 +1837,26 @@ public class Main {
             }
             if (sets != null)
                 existing.putAll(sets);
-            logActivity("Marks", "Marks entered — " + cls + ", " + subject + ", " + sequence);
+            logActivity("Marks", "Marks entered — " + cls + ", " + subject + ", " + sequence + " (" + year + ")");
         }
 
         @Override
-        public synchronized Map<String, Double> getMarks(String cls, String subject, String sequence) {
-            return marks.getOrDefault(cls, Collections.emptyMap()).getOrDefault(subject, Collections.emptyMap())
+        public synchronized Map<String, Double> getMarks(String academicYear, String cls, String subject,
+                String sequence) {
+            String year = (academicYear == null || academicYear.isBlank()) ? settings.academicYear : academicYear;
+            return marksByYear.getOrDefault(year, Collections.emptyMap())
+                    .getOrDefault(cls, Collections.emptyMap())
+                    .getOrDefault(subject, Collections.emptyMap())
                     .getOrDefault(sequence, Collections.emptyMap());
+        }
+
+        @Override
+        public synchronized List<String> getAcademicYears() {
+            List<String> years = new ArrayList<>(marksByYear.keySet());
+            if (!years.contains(settings.academicYear))
+                years.add(settings.academicYear);
+            Collections.sort(years);
+            return years;
         }
 
         @Override
@@ -1779,6 +1913,21 @@ public class Main {
                     c.teacher = "Unassigned";
                 }
             }
+        }
+
+        @Override
+        public synchronized boolean deleteTeacherAccountByEmail(String email) {
+            if (email == null || email.isBlank() || "—".equals(email))
+                return false;
+            boolean[] removed = { false };
+            users.removeIf(u -> {
+                if (u.email != null && u.email.equalsIgnoreCase(email) && "teacher".equals(u.role)) {
+                    removed[0] = true;
+                    return true;
+                }
+                return false;
+            });
+            return removed[0];
         }
 
         @Override
@@ -1857,8 +2006,20 @@ public class Main {
                 settings.currentTerm = fields.get("currentTerm");
             if (fields.containsKey("currentSequence"))
                 settings.currentSequence = fields.get("currentSequence");
-            if (fields.containsKey("academicYear"))
-                settings.academicYear = fields.get("academicYear");
+            if (fields.containsKey("academicYear")) {
+                String newYear = fields.get("academicYear");
+                if (newYear != null && !newYear.equals(settings.academicYear)) {
+                    // A new academic year means a new staffing lineup — clear
+                    // every teacher's class/subject assignments so the admin
+                    // deliberately re-assigns them instead of carrying over
+                    // last year's (possibly stale) roster.
+                    for (Teacher t : teachers)
+                        t.assignments.clear();
+                    logActivity("Settings",
+                            "Academic year changed to " + newYear + " — all teacher assignments were cleared");
+                }
+                settings.academicYear = newYear;
+            }
             if (fields.containsKey("marksScale"))
                 settings.marksScale = fields.get("marksScale");
             if (fields.containsKey("emailNotif"))
@@ -1884,6 +2045,7 @@ public class Main {
             teachers.clear();
             activities.clear();
             marks.clear();
+            marksByYear.clear();
             classes.clear();
         }
 
@@ -2013,17 +2175,21 @@ public class Main {
                         option_name TEXT,
                         electives TEXT,
                         status TEXT DEFAULT 'Active',
-                        photo TEXT DEFAULT ''
+                        photo TEXT DEFAULT '',
+                        admitted_on TEXT DEFAULT ''
                     );
                     ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT DEFAULT '';
+                    ALTER TABLE students ADD COLUMN IF NOT EXISTS admitted_on TEXT DEFAULT '';
                     CREATE TABLE IF NOT EXISTS marks (
                         class_name TEXT NOT NULL,
                         subject TEXT NOT NULL,
                         sequence TEXT NOT NULL,
                         student_id TEXT NOT NULL,
                         score DOUBLE PRECISION NOT NULL,
+                        academic_year TEXT NOT NULL DEFAULT '',
                         PRIMARY KEY (class_name, subject, sequence, student_id)
                     );
+                    ALTER TABLE marks ADD COLUMN IF NOT EXISTS academic_year TEXT NOT NULL DEFAULT '';
                     CREATE TABLE IF NOT EXISTS activities (
                         id SERIAL PRIMARY KEY,
                         type TEXT,
@@ -2061,6 +2227,31 @@ public class Main {
                     );
                     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
                     INSERT INTO keep_alive (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+                    -- One-time backfill: marks recorded before academic-year
+                    -- scoping existed have a blank academic_year — tag them
+                    -- with whatever year is currently configured so they
+                    -- remain visible as "this year's" data after the upgrade.
+                    UPDATE marks SET academic_year = (SELECT academic_year FROM settings WHERE id = 1)
+                        WHERE academic_year IS NULL OR academic_year = '';
+                    -- Widen the primary key to include academic_year so the
+                    -- same class/subject/sequence/student combo can hold a
+                    -- separate score per year. Only runs once — skipped once
+                    -- the key already includes academic_year.
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.table_constraints tc
+                            JOIN information_schema.key_column_usage kcu
+                                ON tc.constraint_name = kcu.constraint_name
+                                AND tc.table_schema = kcu.table_schema
+                            WHERE tc.table_name = 'marks'
+                                AND tc.constraint_type = 'PRIMARY KEY'
+                                AND kcu.column_name = 'academic_year'
+                        ) THEN
+                            ALTER TABLE marks DROP CONSTRAINT IF EXISTS marks_pkey;
+                            ALTER TABLE marks ADD PRIMARY KEY (academic_year, class_name, subject, sequence, student_id);
+                        END IF;
+                    END $$;
                     """;
             try (Connection c = connect(); Statement st = c.createStatement()) {
                 st.execute(schema);
@@ -2143,15 +2334,15 @@ public class Main {
 
         @Override
         public Student addStudent(String name, String className, String gender, String guardian,
-                String phone, String dob, String option, String electives, String photo) {
+                String phone, String dob, String option, String electives, String photo, String admittedOn) {
             try (Connection c = connect()) {
                 c.setAutoCommit(false);
                 try {
                     String id = nextPrefixedId(c, "students", "SPXCC-");
 
                     try (PreparedStatement ps = c.prepareStatement(
-                            "INSERT INTO students (id, name, class_name, gender, guardian, phone, dob, option_name, electives, status, photo) "
-                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?)")) {
+                            "INSERT INTO students (id, name, class_name, gender, guardian, phone, dob, option_name, electives, status, photo, admitted_on) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?)")) {
                         ps.setString(1, id);
                         ps.setString(2, name);
                         ps.setString(3, className);
@@ -2162,6 +2353,7 @@ public class Main {
                         ps.setString(8, option);
                         ps.setString(9, electives);
                         ps.setString(10, photo == null ? "" : photo);
+                        ps.setString(11, admittedOn == null ? "" : admittedOn);
                         ps.executeUpdate();
                     }
 
@@ -2186,6 +2378,7 @@ public class Main {
                     c.commit();
                     Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
                     s.photo = photo == null ? "" : photo;
+                    s.admittedOn = admittedOn == null ? "" : admittedOn;
                     logActivity("Student", "New student enrolled — " + name + " (" + className + ")");
                     return s;
                 } catch (SQLException e) {
@@ -2228,10 +2421,11 @@ public class Main {
                     String electives = fields.getOrDefault("electives", existing.electives);
                     String status = fields.getOrDefault("status", existing.status);
                     String photo = fields.getOrDefault("photo", existing.photo);
+                    String admittedOn = fields.getOrDefault("admittedOn", existing.admittedOn);
 
                     try (PreparedStatement ps = c.prepareStatement(
                             "UPDATE students SET name=?, class_name=?, gender=?, guardian=?, phone=?, dob=?, "
-                                    + "option_name=?, electives=?, status=?, photo=? WHERE id=?")) {
+                                    + "option_name=?, electives=?, status=?, photo=?, admitted_on=? WHERE id=?")) {
                         ps.setString(1, name);
                         ps.setString(2, className);
                         ps.setString(3, gender);
@@ -2242,7 +2436,8 @@ public class Main {
                         ps.setString(8, electives);
                         ps.setString(9, status);
                         ps.setString(10, photo == null ? "" : photo);
-                        ps.setString(11, id);
+                        ps.setString(11, admittedOn == null ? "" : admittedOn);
+                        ps.setString(12, id);
                         ps.executeUpdate();
                     }
 
@@ -2274,6 +2469,7 @@ public class Main {
                     Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
                     s.status = status;
                     s.photo = photo == null ? "" : photo;
+                    s.admittedOn = admittedOn == null ? "" : admittedOn;
                     logActivity("Student", "Student updated — " + name + " (" + id + ")");
                     return s;
                 } catch (SQLException e) {
@@ -2341,6 +2537,8 @@ public class Main {
             s.status = rs.getString("status");
             String photo = rs.getString("photo");
             s.photo = photo == null ? "" : photo;
+            String admittedOn = rs.getString("admitted_on");
+            s.admittedOn = admittedOn == null ? "" : admittedOn;
             return s;
         }
 
@@ -2478,19 +2676,22 @@ public class Main {
         }
 
         @Override
-        public void saveMarks(String cls, String subject, String sequence, Map<String, Double> sets,
-                Set<String> clears) {
+        public void saveMarks(String academicYear, String cls, String subject, String sequence,
+                Map<String, Double> sets, Set<String> clears) {
+            String year = (academicYear == null || academicYear.isBlank()) ? getSettings().academicYear
+                    : academicYear;
             try (Connection c = connect()) {
                 c.setAutoCommit(false);
                 try {
                     if (clears != null && !clears.isEmpty()) {
                         try (PreparedStatement del = c.prepareStatement(
-                                "DELETE FROM marks WHERE class_name = ? AND subject = ? AND sequence = ? AND student_id = ?")) {
+                                "DELETE FROM marks WHERE academic_year = ? AND class_name = ? AND subject = ? AND sequence = ? AND student_id = ?")) {
                             for (String studentId : clears) {
-                                del.setString(1, cls);
-                                del.setString(2, subject);
-                                del.setString(3, sequence);
-                                del.setString(4, studentId);
+                                del.setString(1, year);
+                                del.setString(2, cls);
+                                del.setString(3, subject);
+                                del.setString(4, sequence);
+                                del.setString(5, studentId);
                                 del.addBatch();
                             }
                             del.executeBatch();
@@ -2498,21 +2699,23 @@ public class Main {
                     }
                     if (sets != null && !sets.isEmpty()) {
                         try (PreparedStatement ps = c.prepareStatement(
-                                "INSERT INTO marks (class_name, subject, sequence, student_id, score) VALUES (?, ?, ?, ?, ?) "
-                                        + "ON CONFLICT (class_name, subject, sequence, student_id) DO UPDATE SET score = EXCLUDED.score")) {
+                                "INSERT INTO marks (academic_year, class_name, subject, sequence, student_id, score) VALUES (?, ?, ?, ?, ?, ?) "
+                                        + "ON CONFLICT (academic_year, class_name, subject, sequence, student_id) DO UPDATE SET score = EXCLUDED.score")) {
                             for (Map.Entry<String, Double> e : sets.entrySet()) {
-                                ps.setString(1, cls);
-                                ps.setString(2, subject);
-                                ps.setString(3, sequence);
-                                ps.setString(4, e.getKey());
-                                ps.setDouble(5, e.getValue());
+                                ps.setString(1, year);
+                                ps.setString(2, cls);
+                                ps.setString(3, subject);
+                                ps.setString(4, sequence);
+                                ps.setString(5, e.getKey());
+                                ps.setDouble(6, e.getValue());
                                 ps.addBatch();
                             }
                             ps.executeBatch();
                         }
                     }
                     c.commit();
-                    logActivity("Marks", "Marks entered — " + cls + ", " + subject + ", " + sequence);
+                    logActivity("Marks", "Marks entered — " + cls + ", " + subject + ", " + sequence + " (" + year
+                            + ")");
                 } catch (SQLException e) {
                     c.rollback();
                     throw e;
@@ -2525,14 +2728,17 @@ public class Main {
         }
 
         @Override
-        public Map<String, Double> getMarks(String cls, String subject, String sequence) {
+        public Map<String, Double> getMarks(String academicYear, String cls, String subject, String sequence) {
+            String year = (academicYear == null || academicYear.isBlank()) ? getSettings().academicYear
+                    : academicYear;
             Map<String, Double> out = new HashMap<>();
             try (Connection c = connect();
                     PreparedStatement ps = c.prepareStatement(
-                            "SELECT student_id, score FROM marks WHERE class_name = ? AND subject = ? AND sequence = ?")) {
-                ps.setString(1, cls);
-                ps.setString(2, subject);
-                ps.setString(3, sequence);
+                            "SELECT student_id, score FROM marks WHERE academic_year = ? AND class_name = ? AND subject = ? AND sequence = ?")) {
+                ps.setString(1, year);
+                ps.setString(2, cls);
+                ps.setString(3, subject);
+                ps.setString(4, sequence);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next())
                         out.put(rs.getString("student_id"), rs.getDouble("score"));
@@ -2541,6 +2747,26 @@ public class Main {
                 System.err.println("getMarks failed: " + e.getMessage());
             }
             return out;
+        }
+
+        @Override
+        public List<String> getAcademicYears() {
+            List<String> years = new ArrayList<>();
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT DISTINCT academic_year FROM marks WHERE academic_year <> ''")) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next())
+                        years.add(rs.getString(1));
+                }
+            } catch (SQLException e) {
+                System.err.println("getAcademicYears failed: " + e.getMessage());
+            }
+            String current = getSettings().academicYear;
+            if (!years.contains(current))
+                years.add(current);
+            Collections.sort(years);
+            return years;
         }
 
         @Override
@@ -2647,6 +2873,21 @@ public class Main {
                 }
             } catch (SQLException e) {
                 System.err.println("deleteTeacher failed: " + e.getMessage());
+            }
+        }
+
+        @Override
+        public boolean deleteTeacherAccountByEmail(String email) {
+            if (email == null || email.isBlank() || "—".equals(email))
+                return false;
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "DELETE FROM users WHERE LOWER(email) = LOWER(?) AND role = 'teacher'")) {
+                ps.setString(1, email);
+                return ps.executeUpdate() > 0;
+            } catch (SQLException e) {
+                System.err.println("deleteTeacherAccountByEmail failed: " + e.getMessage());
+                return false;
             }
         }
 
@@ -2782,6 +3023,7 @@ public class Main {
         @Override
         public SchoolSettings updateSettings(Map<String, String> fields) {
             SchoolSettings s = getSettings();
+            String previousYear = s.academicYear;
             if (fields.containsKey("schoolName"))
                 s.schoolName = fields.get("schoolName");
             if (fields.containsKey("schoolCode"))
@@ -2844,6 +3086,19 @@ public class Main {
                 ps.setString(17, s.principalSignature);
                 ps.setString(18, s.nextTermBegins);
                 ps.executeUpdate();
+
+                if (fields.containsKey("academicYear") && s.academicYear != null
+                        && !s.academicYear.equals(previousYear)) {
+                    // A new academic year means a new staffing lineup — clear
+                    // every teacher's class/subject assignments so the admin
+                    // deliberately re-assigns them instead of carrying over
+                    // last year's (possibly stale) roster.
+                    try (Statement clearAssignments = c.createStatement()) {
+                        clearAssignments.executeUpdate("DELETE FROM assignments");
+                    }
+                    logActivity("Settings", "Academic year changed to " + s.academicYear
+                            + " — all teacher assignments were cleared");
+                }
             } catch (SQLException e) {
                 throw new RuntimeException("updateSettings failed: " + e.getMessage(), e);
             }

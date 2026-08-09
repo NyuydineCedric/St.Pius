@@ -1,24 +1,23 @@
 import { useState, useEffect } from "react";
 import { BookOpen, Menu, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import logo from "../assets/logo.jpg";
+import logo from "../assets/logo.jpeg";
 
 const NavBar = ({ currentSection, onSectionChange }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
-  useEffect(()=>{
-    const handleScroll=()=>{
-        if(window.scrollY>60){
-            setScrolled(true);
-        }else{
-            setScrolled(false)
-        }
+  useEffect(() => {
+    const handleScroll = () => {
+      if (window.scrollY > 60) {
+        setScrolled(true);
+      } else {
+        setScrolled(false);
+      }
     };
     window.addEventListener("scroll", handleScroll);
-    return() => window.removeEventListener("scroll", handleScroll)
-
-  },[])
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   const NavLink = [
     { name: "Home", section: "home" },
@@ -38,7 +37,9 @@ const NavBar = ({ currentSection, onSectionChange }) => {
   };
 
   return (
-    <nav className={`fixed top-0 right-0 left-0 backdrop-blur-xl z-50 transition-all duration-500 ${scrolled?"bg-[#e8eef9] shadow-md":"bg-transparent"}`}>
+    <nav
+      className={`fixed top-0 right-0 left-0 backdrop-blur-xl z-50 transition-all duration-500 ${scrolled ? "bg-[#e8eef9] shadow-md" : "bg-transparent"}`}
+    >
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
           <div

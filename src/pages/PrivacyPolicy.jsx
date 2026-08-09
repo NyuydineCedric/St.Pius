@@ -151,9 +151,8 @@ const PrivacyPolicy = () => {
                   If you have any questions about this Privacy Policy, please contact us:
                 </p>
                 <ul className="space-y-1 text-sm">
-                  <li><strong>Email:</strong> bayebrian89@gmail.com</li>
-                  <li><strong>Phone:</strong> +237 678772649</li>
-                  <li><strong>Phone:</strong> +237 675717944</li>
+                  <li><strong>Email:</strong> nyuydinecedric@gmail.com</li>
+                  <li><strong>Phone / WhatsApp:</strong> +237 678 772 649</li>
                 </ul>
               </div>
             </section>

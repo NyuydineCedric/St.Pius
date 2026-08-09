@@ -157,14 +157,27 @@ export function getRoster(className) {
   return getJson(`/api/roster?class=${encodeURIComponent(className)}`);
 }
 
-export function getMarks(cls, subject, sequence) {
+// academicYear is optional — omit it (or pass "") to read the currently
+// configured year. Student History / Mastersheet pass an explicit year
+// to look back at a prior one.
+export function getMarks(cls, subject, sequence, academicYear = "") {
+  const yearParam = academicYear
+    ? `&academicYear=${encodeURIComponent(academicYear)}`
+    : "";
   return getJson(
-    `/api/marks?class=${encodeURIComponent(cls)}&subject=${encodeURIComponent(subject)}&sequence=${encodeURIComponent(sequence)}`,
+    `/api/marks?class=${encodeURIComponent(cls)}&subject=${encodeURIComponent(subject)}&sequence=${encodeURIComponent(sequence)}${yearParam}`,
   );
 }
 
+// Always writes to the current academic year — the backend ignores any
+// year the client sends, so marks entry can never accidentally overwrite
+// a prior year's scores.
 export function saveMarks(cls, subject, sequence, marks) {
   return postJson("/api/marks", { class: cls, subject, sequence, marks });
+}
+
+export function getAcademicYears() {
+  return getJson("/api/academic-years");
 }
 
 export function getActivities() {

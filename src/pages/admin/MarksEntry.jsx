@@ -22,6 +22,7 @@ import {
   requiresStream,
   compareClassNames,
 } from "../../utils/subjects";
+import { catLabel } from "../../utils/grading";
 
 const termSequences = {
   "First Term": ["Sequence 1", "Sequence 2"],
@@ -159,13 +160,13 @@ export default function MarksEntry() {
     <>
       <PageHeading
         title="Marks Entry"
-        subtitle={`Select a class, subject, and sequence, then enter marks out of ${marksScale}.`}
+        subtitle={`Select a class, subject, and CAT, then enter marks out of ${marksScale}.`}
       />
 
       <Card>
         <CardHeader
           title="Enter Academic Results"
-          subtitle="Fill marks for each subject and save them per sequence."
+          subtitle="Fill marks for each subject and save them per CAT."
         />
         <div
           className={`grid gap-4 sm:grid-cols-2 ${
@@ -247,14 +248,16 @@ export default function MarksEntry() {
             </Select>
           </div>
           <div>
-            <Label htmlFor="sequence">Sequence</Label>
+            <Label htmlFor="sequence">CAT</Label>
             <Select
               id="sequence"
               value={sequence}
               onChange={(e) => setSequence(e.target.value)}
             >
               {(termSequences[term] || []).map((s) => (
-                <option key={s}>{s}</option>
+                <option key={s} value={s}>
+                  {catLabel(s)}
+                </option>
               ))}
             </Select>
           </div>
@@ -263,7 +266,7 @@ export default function MarksEntry() {
 
       <Card className="mt-6">
         <CardHeader
-          title={`${cls}${cls ? " · " + term + " · " + sequence : ""}`}
+          title={`${cls}${cls ? " · " + term + " · " + catLabel(sequence) : ""}`}
           subtitle={`${filteredRoster.length} student${
             filteredRoster.length === 1 ? "" : "s"
           } ${

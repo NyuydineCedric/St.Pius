@@ -31,6 +31,7 @@ import {
   getSettings,
 } from "../../utils/api";
 import { getSubjectsForStudent } from "../../utils/subjects";
+import { catLabel } from "../../utils/grading";
 
 const quickActions = [
   { label: "Add New Student", icon: UserPlus, to: "/admin/students" },
@@ -224,7 +225,7 @@ export default function AdminDashboard() {
       tone: "bg-[#10b981]/10 text-[#10b981]",
     },
     {
-      label: "Sequences",
+      label: "CATs",
       value: 6,
       icon: Layers,
       tone: "bg-amber-100 text-amber-700",
@@ -351,7 +352,7 @@ export default function AdminDashboard() {
               Top Performing Classes
             </h3>
             <p className="text-xs text-slate-400">
-              Based on {settings.currentSequence || "current sequence"}
+              Based on {catLabel(settings.currentSequence) || "current CAT"}
             </p>
             <div className="mt-4 flex flex-col gap-3">
               {loadingAverages ? (
@@ -360,7 +361,7 @@ export default function AdminDashboard() {
                 </p>
               ) : topClasses.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-400">
-                  No marks recorded for this sequence yet.
+                  No marks recorded for this CAT yet.
                 </p>
               ) : (
                 topClasses.map((c, i) => (
@@ -396,7 +397,7 @@ export default function AdminDashboard() {
               Class Performance
             </h3>
             <p className="text-xs text-slate-400">
-              {settings.currentSequence || "Current sequence"} average by class
+              {catLabel(settings.currentSequence) || "Current CAT"} average by class
             </p>
             <div className="mt-4 h-56">
               {loadingAverages ? (

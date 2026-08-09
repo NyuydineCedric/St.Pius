@@ -11,12 +11,14 @@ mkdir -p "$OUT" "$DATA" "$PUBLIC"
 find "$SRC" -name '*.java' > "$OUT/sources.txt"
 javac -d "$OUT" @"$OUT/sources.txt"
 
-# Copy built frontend if present so the API can serve it directly.
-if [[ -d "$ROOT/dist" ]]; then
-  rm -rf "$PUBLIC"
-  mkdir -p "$PUBLIC"
-  cp -R "$ROOT/dist/." "$PUBLIC/"
-fi
+# Rebuild the frontend and sync it into the backend's static folder every
+# time this runs — otherwise the compiled backend keeps serving whichever
+# frontend snapshot happened to land in $PUBLIC the first time this script
+# ran, so UI changes silently never show up even after a clean recompile.
+(cd "$ROOT" && npm run build)
+rm -rf "$PUBLIC"
+mkdir -p "$PUBLIC"
+cp -R "$ROOT/dist/." "$PUBLIC/"
 
 echo "Starting backend → http://127.0.0.1:${PORT:-8080}"
 echo "Data dir: $DATA"

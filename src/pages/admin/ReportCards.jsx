@@ -19,14 +19,21 @@ import {
   getSettings,
 } from "../../utils/api";
 import {
-  gradeForScale,
   statusForScale,
   remarkForScale,
   principalRemark,
+  termSequences,
+  computeTermAverage,
+  computeFinalAverage,
+  computePosition,
+  competitionRank,
+  computeSubjectRanks,
+  computeSubjectClassAverage,
+  buildStudentRecords,
+  catLabel,
 } from "../../utils/grading";
 import {
   getSubjectsForStudent,
-  getTeacherName,
   requiresStream,
   compareClassNames,
 } from "../../utils/subjects";
@@ -49,12 +56,6 @@ import {
  *  school's actual "PROGRESS REPORT CARD" paper template.
  * ------------------------------------------------------------------ */
 
-const termSequences = {
-  "First Term": ["Sequence 1", "Sequence 2"],
-  "Second Term": ["Sequence 3", "Sequence 4"],
-  "Third Term": ["Sequence 5", "Sequence 6"],
-};
-
 function formatDate(date) {
   return date.toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -72,95 +73,6 @@ function formatNextTerm(dateStr) {
   return formatDate(date);
 }
 
-function computeSubjectRanks(studentId, records, subjectName) {
-  const ranking = records
-    .map((r) => {
-      const subject = r.subjects.find((s) => s.name === subjectName);
-      if (!subject || subject.average == null) return null;
-      return { id: r.student.id, score: subject.average };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score);
-  return competitionRank(studentId, ranking);
-}
-
-// Class-wide average for a single subject (used in the "SUBJ. AVR." column,
-// which is distinct from the student's own "TERMINAL AVR." for that subject).
-function computeSubjectClassAverage(records, subjectName) {
-  const scores = records
-    .map((r) => r.subjects.find((s) => s.name === subjectName))
-    .filter((s) => s && s.average != null)
-    .map((s) => s.average);
-  if (!scores.length) return null;
-  return scores.reduce((sum, v) => sum + v, 0) / scores.length;
-}
-
-/** Class position for the current term (1 = highest average). Ties share rank. */
-function computePosition(studentId, records) {
-  const ranking = records
-    .filter((r) => r.average != null)
-    .map((r) => ({ id: r.student.id, score: r.average }))
-    .sort((a, b) => b.score - a.score);
-  return competitionRank(studentId, ranking);
-}
-
-/** Competition ranking: 1, 2, 2, 4 — equal scores share the same place. */
-function competitionRank(studentId, ranking) {
-  if (!ranking.length) return null;
-  let rank = 1;
-  for (let i = 0; i < ranking.length; i++) {
-    if (i > 0 && ranking[i].score < ranking[i - 1].score) {
-      rank = i + 1;
-    }
-    if (ranking[i].id === studentId) return rank;
-  }
-  return null;
-}
-
-// Takes the full student object (not just the id) because the subject list
-// — and therefore the weighting — depends on the student's class/option/electives.
-//
-// Term average = coefficient-weighted mean of each subject's sequence average.
-// A subject's sequence average uses only sequences that have a mark (missing ≠ 0).
-function computeTermAverage(student, term, classMarksData) {
-  const sequences = termSequences[term] || [];
-  if (sequences.length === 0) return null;
-
-  const subjectList = getSubjectsForStudent(student);
-  let totalWeighted = 0;
-  let totalCoefficient = 0;
-  let hasAnyMark = false;
-
-  subjectList.forEach((subject) => {
-    const marks = sequences.map((sequence) => {
-      const raw = classMarksData[subject.name]?.[sequence]?.[student.id];
-      return raw === undefined || raw === null || raw === ""
-        ? null
-        : Number(raw);
-    });
-    const present = marks.filter((m) => m !== null && !Number.isNaN(m));
-    if (present.length === 0) return;
-    hasAnyMark = true;
-    const subjectAverage =
-      present.reduce((sum, m) => sum + m, 0) / present.length;
-    totalWeighted += subjectAverage * subject.coefficient;
-    totalCoefficient += subject.coefficient;
-  });
-
-  if (!hasAnyMark || !totalCoefficient) return null;
-  return totalWeighted / totalCoefficient;
-}
-
-/** Annual (year) average = mean of the three term averages. Needs all three. */
-function computeFinalAverage(termAvgs) {
-  if (!termAvgs) return null;
-  const first = termAvgs["First Term"];
-  const second = termAvgs["Second Term"];
-  const third = termAvgs["Third Term"];
-  if (first == null || second == null || third == null) return null;
-  return (first + second + third) / 3;
-}
-
 /* ------------------------------------------------------------------ *
  *  Presentational pieces — redesigned to match the paper template.
  * ------------------------------------------------------------------ */
@@ -171,7 +83,7 @@ const fmt2 = (v) => (v == null || Number.isNaN(v) ? "-" : Number(v).toFixed(2));
 // Column widths taken from the original template (percent of table width).
 const COLS = [15, 7, 7, 9, 9, 5, 9, 8, 15, 16];
 
-function ReportCardBody({
+export function ReportCardBody({
   student,
   subjects,
   term,
@@ -242,10 +154,10 @@ function ReportCardBody({
             <img
               src={student.photo}
               alt={`${student.name} — photo`}
-              className="h-32 w-28 border border-black object-cover print:h-24 print:w-20"
+              className="h-40 w-40 border border-black object-cover print:h-34 print:w-30"
             />
           ) : (
-            <div className="flex h-32 w-28 items-center justify-center border border-black text-[10px] uppercase text-slate-400 print:h-24 print:w-20 print:text-[8px]">
+            <div className="flex h-42 w-28 items-center justify-center border border-black text-[10px] uppercase text-slate-400 print:h-24 print:w-20 print:text-[8px]">
               Photo
             </div>
           )}
@@ -331,11 +243,11 @@ function ReportCardBody({
                 Subject
               </th>
               <th className="border border-black px-1.5 py-1.5 text-[12px] font-bold uppercase leading-tight print:text-[9px]">
-                {seqLabel1.replace("Sequence", "Seq.")}
+                {catLabel(seqLabel1)}
                 <br />({settings.marksScale || 20})
               </th>
               <th className="border border-black px-1.5 py-1.5 text-[12px] font-bold uppercase leading-tight print:text-[9px]">
-                {seqLabel2.replace("Sequence", "Seq.")}
+                {catLabel(seqLabel2)}
                 <br />({settings.marksScale || 20})
               </th>
               <th className="border border-black px-1.5 py-1.5 text-[12px] font-bold uppercase print:text-[9px]">
@@ -479,7 +391,11 @@ function ReportCardBody({
               Status
             </p>
             <p className="text-[14px] font-bold print:text-[10.5px]">
-              {statusForScale(average, settings.marksScale, settings.passAverage)}
+              {statusForScale(
+                average,
+                settings.marksScale,
+                settings.passAverage,
+              )}
             </p>
           </div>
           <div className="border-r border-black px-1 py-1.5 print:py-1">
@@ -537,7 +453,11 @@ function ReportCardBody({
           </div>
           <div className="min-h-[2.5rem] flex-1 px-3 py-1.5 text-[12px] italic leading-snug print:min-h-[1.75rem] print:text-[9.5px]">
             {average != null
-              ? principalRemark(average, settings.marksScale, settings.passAverage)
+              ? principalRemark(
+                  average,
+                  settings.marksScale,
+                  settings.passAverage,
+                )
               : " "}
           </div>
         </div>
@@ -548,7 +468,9 @@ function ReportCardBody({
             Overall Remark
           </div>
           <div className="flex min-h-[5rem] flex-1 items-center justify-center px-2 py-1.5 text-center text-[13px] font-bold uppercase print:min-h-[3.5rem] print:text-[10px]">
-            {average != null ? remarkForScale(average, settings.marksScale) : " "}
+            {average != null
+              ? remarkForScale(average, settings.marksScale)
+              : " "}
           </div>
           <div className="border-t border-black px-3 py-1 text-right text-[12px] font-bold uppercase print:text-[9.5px]">
             Next Term: {formatNextTerm(settings.nextTermBegins)}
@@ -574,30 +496,30 @@ function ReportCardBody({
           </p>
         </div>
         <div>
+          <p className="text-[13px] font-bold uppercase print:text-[10px]">
+            Principal
+          </p>
           {/* Principal's stamp + signature, uploaded once in Settings and
-              reused on every report card — side by side, sitting just above
+              reused on every report card — side by side, sitting below
               the "Principal" label. */}
           {(settings.principalStamp || settings.principalSignature) && (
-            <div className="mx-auto mb-1 flex h-12 items-end justify-center gap-3 print:h-9">
+            <div className="mx-auto mt-1 flex items-end justify-center ">
               {settings.principalSignature && (
                 <img
                   src={settings.principalSignature}
                   alt="Principal's signature"
-                  className="h-11 object-contain print:h-8"
+                  className="h-25 object-contain print:h-25"
                 />
               )}
               {settings.principalStamp && (
                 <img
                   src={settings.principalStamp}
                   alt="School stamp"
-                  className="h-12 w-12 object-contain print:h-9 print:w-9"
+                  className="h-30 w-30 object-contain print:h-30 print:w-30"
                 />
               )}
             </div>
           )}
-          <p className="text-[13px] font-bold uppercase print:text-[10px]">
-            Principal
-          </p>
         </div>
       </div>
     </div>
@@ -833,70 +755,17 @@ export default function ReportCards() {
     [students, search, streamed, optionFilter],
   );
 
-  const studentRecords = useMemo(() => {
-    const sequences = termSequences[term] || [];
-    // Principal-configured pass average (Settings → Academic Structure),
-    // expressed as a percentage of the marks scale. Defaults to 50%.
-    const passThreshold =
-      (Number(settings.marksScale) || 20) *
-      ((Number(settings.passAverage) || 50) / 100);
-    return students.map((student) => {
-      const subjectList = getSubjectsForStudent(student);
-      const subjects = subjectList.map((subject) => {
-        const marks = sequences.map((sequence) => {
-          const raw = classMarks[subject.name]?.[sequence]?.[student.id];
-          return raw === undefined || raw === null || raw === ""
-            ? null
-            : Number(raw);
-        });
-        const present = marks.filter((m) => m !== null && !Number.isNaN(m));
-        const average =
-          present.length === 0
-            ? null
-            : present.reduce((sum, m) => sum + m, 0) / present.length;
-        return {
-          ...subject,
-          teacher: getTeacherName(teachers, student.class, subject.name),
-          marks,
-          average,
-          grade:
-            average == null
-              ? null
-              : gradeForScale(average, settings.marksScale),
-        };
-      });
-      const scored = subjects.filter((s) => s.average != null);
-      const totalWeighted = scored.reduce(
-        (acc, item) => acc + item.average * item.coefficient,
-        0,
-      );
-      const totalCoefficient = scored.reduce(
-        (acc, item) => acc + item.coefficient,
-        0,
-      );
-      const papersSat = scored.length;
-      const papersPassed = scored.filter(
-        (s) => s.average >= passThreshold,
-      ).length;
-      const papersFailed = scored.filter(
-        (s) => s.average < passThreshold,
-      ).length;
-      // GCE Standard: pass if at least 4 subjects individually clear the
-      // pass mark, regardless of overall average — only meaningful for
-      // Form 4/5 and Lower/Upper Sixth; the footer only displays it there.
-      const gceStatus = papersPassed >= 4 ? "Pass" : "Fail";
-      return {
-        student,
-        subjects,
-        totalWeighted,
-        papersSat,
-        papersPassed,
-        papersFailed,
-        gceStatus,
-        average: totalCoefficient ? totalWeighted / totalCoefficient : null,
-      };
-    });
-  }, [students, classMarks, term, teachers, settings.marksScale, settings.passAverage]);
+  const studentRecords = useMemo(
+    () => buildStudentRecords(students, classMarks, term, teachers, settings),
+    [
+      students,
+      classMarks,
+      term,
+      teachers,
+      settings.marksScale,
+      settings.passAverage,
+    ],
+  );
 
   const selectedRecord = useMemo(
     () =>

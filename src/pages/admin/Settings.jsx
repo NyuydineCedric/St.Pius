@@ -35,6 +35,7 @@ import {
   assignClassMaster,
 } from "../../utils/api";
 import { ALL_SUBJECTS, compareClassNames } from "../../utils/subjects";
+import { catLabel } from "../../utils/grading";
 import { fileToCompressedDataUrl } from "../../utils/image";
 import {
   SCHOOL_NAME,
@@ -393,7 +394,7 @@ export default function Settings() {
         <Card>
           <CardHeader
             title="Academic Structure"
-            subtitle="Current term and sequence configuration"
+            subtitle="Current term and CAT configuration"
             action={<CalendarRange size={18} className="text-slate-300" />}
           />
           <div className="flex flex-col gap-4">
@@ -413,7 +414,7 @@ export default function Settings() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="seq">Current Sequence</Label>
+                <Label htmlFor="seq">Current CAT</Label>
                 <Select
                   id="seq"
                   value={structure.currentSequence}
@@ -425,7 +426,9 @@ export default function Settings() {
                   }
                 >
                   {Array.from({ length: 6 }, (_, i) => (
-                    <option key={i}>{`Sequence ${i + 1}`}</option>
+                    <option key={i} value={`Sequence ${i + 1}`}>
+                      {catLabel(`Sequence ${i + 1}`)}
+                    </option>
                   ))}
                 </Select>
               </div>

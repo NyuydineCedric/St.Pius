@@ -17,6 +17,7 @@ import {
   getSettings,
 } from "../../utils/api";
 import { getSubjectsForStudent } from "../../utils/subjects";
+import { catLabel } from "../../utils/grading";
 import { useAuth } from "../../context/AuthContext";
 
 const termSequences = {
@@ -239,7 +240,7 @@ export default function TeacherMarksEntry() {
     <>
       <PageHeading
         title="My Marks Entry"
-        subtitle={`Welcome ${teacherRecord?.name || ""}. Choose a class and subject, then enter marks for both sequences of the term (out of ${marksScale}).`}
+        subtitle={`Welcome ${teacherRecord?.name || ""}. Choose a class and subject, then enter marks for both CATs of the term (out of ${marksScale}).`}
       />
 
       <Card>
@@ -363,7 +364,7 @@ export default function TeacherMarksEntry() {
           </div>
         ) : (
           <form onSubmit={handleSave}>
-            <Table columns={["Student ID", "Student Name", ...sequences]}>
+            <Table columns={["Student ID", "Student Name", ...sequences.map(catLabel)]}>
               {visibleRoster.map((s) => (
                 <tr
                   key={s.id}

@@ -24,10 +24,12 @@ import {
   IdCard,
   Menu,
   X,
+  Table2,
+  ArrowUpCircle,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { focusRing } from "./ui";
-import logo from "../assets/logo.jpg";
+import logo from "../assets/logo.jpeg";
 import {
   getSettings,
   getStudents,
@@ -42,7 +44,9 @@ const adminNavItems = [
   { label: "Student Cards", icon: IdCard, path: "/admin/student-cards" },
   { label: "Marks Entry", icon: PenSquare, path: "/admin/marks" },
   { label: "Classes", icon: Users, path: "/admin/classes" },
+  { label: "Promotions", icon: ArrowUpCircle, path: "/admin/promotions" },
   { label: "Report Cards", icon: FileText, path: "/admin/report-cards" },
+  { label: "Mastersheet", icon: Table2, path: "/admin/mastersheet" },
   { label: "Performance", icon: TrendingUp, path: "/admin/performance" },
   { label: "Activities", icon: RotateCcw, path: "/admin/activities" },
   { label: "Settings", icon: SettingsIcon, path: "/admin/settings" },
@@ -503,7 +507,7 @@ export default function Layout() {
                 />
               </div>
               <div className="mt-2 text-[11px] text-slate-400">
-                Sequence {progress.sequenceNumber} of 6 in progress
+                CAT {progress.sequenceNumber} of 6 in progress
               </div>
             </div>
           )}
@@ -603,91 +607,92 @@ export default function Layout() {
               </div>
               {/* Teachers don't get the notification bell — admin-only. */}
               {user?.role !== "teacher" && (
-              <div className="relative" ref={notifWrapRef}>
-                <button
-                  type="button"
-                  aria-label="Notifications"
-                  aria-expanded={notifOpen}
-                  onClick={toggleNotifications}
-                  className={`relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 transition-colors hover:border-[#0ea5e9]/40 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${
-                    notifOpen
-                      ? "border-[#0ea5e9]/40 bg-[#0ea5e9]/10 text-[#0ea5e9]"
-                      : ""
-                  } ${focusRing || ""}`}
-                >
-                  <Bell size={16} />
-                  {unreadCount > 0 && (
-                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0ea5e9] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">
-                      {unreadCount > 9 ? "9+" : unreadCount}
-                    </span>
-                  )}
-                </button>
-                {notifOpen && (
-                  <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-lg sm:w-96">
-                    <div className="flex items-center justify-between border-b border-[#e2e8f0] px-4 py-3">
-                      <p className="text-sm font-semibold text-[#1e3a8a]">
-                        Notifications
-                      </p>
-                      <span className="text-xs text-slate-400">
-                        {visibleNotifications.length === 0
-                          ? "None yet"
-                          : `${visibleNotifications.length} total`}
+                <div className="relative" ref={notifWrapRef}>
+                  <button
+                    type="button"
+                    aria-label="Notifications"
+                    aria-expanded={notifOpen}
+                    onClick={toggleNotifications}
+                    className={`relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[#e2e8f0] text-slate-500 transition-colors hover:border-[#0ea5e9]/40 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${
+                      notifOpen
+                        ? "border-[#0ea5e9]/40 bg-[#0ea5e9]/10 text-[#0ea5e9]"
+                        : ""
+                    } ${focusRing || ""}`}
+                  >
+                    <Bell size={16} />
+                    {unreadCount > 0 && (
+                      <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0ea5e9] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">
+                        {unreadCount > 9 ? "9+" : unreadCount}
                       </span>
+                    )}
+                  </button>
+                  {notifOpen && (
+                    <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-lg sm:w-96">
+                      <div className="flex items-center justify-between border-b border-[#e2e8f0] px-4 py-3">
+                        <p className="text-sm font-semibold text-[#1e3a8a]">
+                          Notifications
+                        </p>
+                        <span className="text-xs text-slate-400">
+                          {visibleNotifications.length === 0
+                            ? "None yet"
+                            : `${visibleNotifications.length} total`}
+                        </span>
+                      </div>
+                      {recentNotifications.length === 0 ? (
+                        <p className="px-4 py-8 text-center text-sm text-slate-400">
+                          {user?.role === "teacher"
+                            ? "No updates for your classes yet. Save marks or print a report card to see them here."
+                            : "No activity yet. Enrol a student, enter marks, or print a report card to see updates here."}
+                        </p>
+                      ) : (
+                        <ul className="max-h-80 overflow-y-auto">
+                          {recentNotifications.map((item, i) => {
+                            const Icon = notifIconByType[item.type] || FileText;
+                            const unreadCutoff =
+                              panelBaseline != null ? panelBaseline : lastSeen;
+                            const isUnread =
+                              (item.timestamp || 0) > unreadCutoff;
+                            return (
+                              <li
+                                key={`${item.timestamp}-${i}`}
+                                className={`flex items-start gap-3 border-b border-[#e2e8f0]/70 px-4 py-3 last:border-0 ${
+                                  isUnread ? "bg-[#0ea5e9]/5" : "bg-white"
+                                }`}
+                              >
+                                <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#1e3a8a] text-[#0ea5e9]">
+                                  <Icon size={14} />
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm leading-snug text-[#1e293b]">
+                                    {item.text}
+                                  </p>
+                                  <p className="mt-0.5 text-xs text-slate-400">
+                                    {item.type}
+                                    {item.timestamp
+                                      ? ` · ${relativeTime(item.timestamp)}`
+                                      : ""}
+                                  </p>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                      {activitiesPath && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNotifOpen(false);
+                            navigate(activitiesPath);
+                          }}
+                          className="w-full border-t border-[#e2e8f0] px-4 py-2.5 text-left text-sm font-medium text-[#0ea5e9] hover:bg-[#f1f5f9]"
+                        >
+                          View all activity
+                        </button>
+                      )}
                     </div>
-                    {recentNotifications.length === 0 ? (
-                      <p className="px-4 py-8 text-center text-sm text-slate-400">
-                        {user?.role === "teacher"
-                          ? "No updates for your classes yet. Save marks or print a report card to see them here."
-                          : "No activity yet. Enrol a student, enter marks, or print a report card to see updates here."}
-                      </p>
-                    ) : (
-                      <ul className="max-h-80 overflow-y-auto">
-                        {recentNotifications.map((item, i) => {
-                          const Icon = notifIconByType[item.type] || FileText;
-                          const unreadCutoff =
-                            panelBaseline != null ? panelBaseline : lastSeen;
-                          const isUnread = (item.timestamp || 0) > unreadCutoff;
-                          return (
-                            <li
-                              key={`${item.timestamp}-${i}`}
-                              className={`flex items-start gap-3 border-b border-[#e2e8f0]/70 px-4 py-3 last:border-0 ${
-                                isUnread ? "bg-[#0ea5e9]/5" : "bg-white"
-                              }`}
-                            >
-                              <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#1e3a8a] text-[#0ea5e9]">
-                                <Icon size={14} />
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm leading-snug text-[#1e293b]">
-                                  {item.text}
-                                </p>
-                                <p className="mt-0.5 text-xs text-slate-400">
-                                  {item.type}
-                                  {item.timestamp
-                                    ? ` · ${relativeTime(item.timestamp)}`
-                                    : ""}
-                                </p>
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                    {activitiesPath && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setNotifOpen(false);
-                          navigate(activitiesPath);
-                        }}
-                        className="w-full border-t border-[#e2e8f0] px-4 py-2.5 text-left text-sm font-medium text-[#0ea5e9] hover:bg-[#f1f5f9]"
-                      >
-                        View all activity
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
               )}
               <div
                 className="flex flex-shrink-0 items-center gap-2 rounded-full border border-[#e2e8f0] py-1 pl-1 pr-3"
@@ -718,8 +723,7 @@ export default function Layout() {
           <main className="min-h-0 flex-1 overflow-y-auto overflow-x-auto px-4 py-6 sm:px-6">
             <Outlet />
             <footer className="mt-8 pb-4 text-center text-xs text-slate-400">
-              SCHOOL Report Card &amp; Information System — Developed by
-              Nyuydine Cedric and Baye Brian
+              SCHOOL Report Card &amp; Information System — Nyuydine Cedric
             </footer>
           </main>
         </div>

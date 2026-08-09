@@ -24,5 +24,17 @@ for /f "delims=" %%f in ('dir /s /b "%SRC%\*.java"') do (
 javac -d "%OUT%" @"%OUT%\sources.txt"
 if errorlevel 1 exit /b 1
 
+REM Rebuild the frontend and sync it into the backend's static folder every
+REM time this runs. Without this step the compiled backend keeps serving
+REM whichever frontend snapshot happened to land in %PUBLIC% the first time
+REM the script ran, so UI changes silently never show up even after the
+REM Java side recompiles cleanly.
+echo Building frontend...
+call npm run build
+if errorlevel 1 exit /b 1
+if exist "%PUBLIC%" rmdir /s /q "%PUBLIC%"
+mkdir "%PUBLIC%"
+xcopy "dist" "%PUBLIC%" /E /I /Y >nul
+
 echo Starting backend on http://127.0.0.1:8080
 java -cp "%OUT%" com.reportcard.Main "%DATA%" "%PUBLIC%"

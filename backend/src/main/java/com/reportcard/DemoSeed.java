@@ -10,8 +10,8 @@ import java.util.*;
  */
 final class DemoSeed {
 
-    static final String ADMIN_EMAIL = "admin@gbhs-demo.cm";
-    static final String ADMIN_PASSWORD = "DemoAdmin123!";
+    static final String ADMIN_EMAIL = "stpius@gmail.com";
+    static final String ADMIN_PASSWORD = "stpius123@";
     static final String TEACHER_EMAIL = "teacher@gbhs-demo.cm";
     static final String TEACHER_PASSWORD = "DemoTeacher123!";
 
@@ -129,7 +129,7 @@ final class DemoSeed {
                         continue;
                     Map<String, Double> sets = new HashMap<>();
                     sets.put(s.id, mark);
-                    store.saveMarks(s.className, subject, seq, sets, Collections.emptySet());
+                    store.saveMarks(null, s.className, subject, seq, sets, Collections.emptySet());
                 }
             }
         }
@@ -166,7 +166,7 @@ final class DemoSeed {
         for (String[] row : rows) {
             // name, gender, guardian, phone, dob
             out.add(store.addStudent(row[0], className, row[1], row[2], row[3], row[4],
-                    option == null ? "" : option, electives == null ? "" : electives, ""));
+                    option == null ? "" : option, electives == null ? "" : electives, "", ""));
         }
         return out;
     }

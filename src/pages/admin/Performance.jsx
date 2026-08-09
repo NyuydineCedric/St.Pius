@@ -50,7 +50,7 @@ const termSequences = {
 const totalCoefficient = subjectRows.reduce((sum, s) => sum + s.coefficient, 0);
 
 function sequenceShortLabel(sequence) {
-  return sequence.replace("Sequence ", "Seq ");
+  return sequence.replace("Sequence ", "CAT ");
 }
 
 // Weighted average across all subjects for ONE sequence, for one student in one class.
@@ -218,7 +218,7 @@ export default function Performance() {
     <>
       <PageHeading
         title="Performance"
-        subtitle="Academic trends across sequences, classes, and students."
+        subtitle="Academic trends across CATs, classes, and students."
         action={
           <Select
             value={term}
@@ -241,7 +241,7 @@ export default function Performance() {
         <Card>
           <CardHeader
             title="Overall Trend"
-            subtitle="School-wide average by sequence"
+            subtitle="School-wide average by CAT"
           />
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">

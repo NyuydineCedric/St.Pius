@@ -62,6 +62,7 @@ export default function StudentEntry() {
     option: "",
     electives: [],
     photo: "",
+    admittedOn: "",
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -69,6 +70,7 @@ export default function StudentEntry() {
   const [photoError, setPhotoError] = useState("");
   const [photoLoading, setPhotoLoading] = useState(false);
   const photoInputRef = useRef(null);
+  const formCardRef = useRef(null);
 
   // Bulk import state
   const fileInputRef = useRef(null);
@@ -163,6 +165,7 @@ export default function StudentEntry() {
       option: "",
       electives: [],
       photo: "",
+      admittedOn: "",
     });
   }
 
@@ -182,8 +185,14 @@ export default function StudentEntry() {
         ? student.electives.split(",").map((s) => s.trim()).filter(Boolean)
         : [],
       photo: student.photo || "",
+      admittedOn:
+        student.admittedOn && student.admittedOn !== "—" ? student.admittedOn : "",
     });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // The page's only scroll container is <main> in Layout.jsx, not the
+    // window — window.scrollTo is a no-op there. scrollIntoView finds
+    // whichever ancestor actually scrolls, so this reliably brings the
+    // form into view even when editing a student far down the list.
+    formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function triggerPhotoPicker() {
@@ -256,6 +265,7 @@ export default function StudentEntry() {
       option: streamRequired ? form.option : "",
       electives: streamRequired ? form.electives.join(",") : "",
       photo: form.photo || "",
+      admittedOn: form.admittedOn || "",
     };
     try {
       if (editingId) {
@@ -391,6 +401,7 @@ export default function StudentEntry() {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[380px_1fr]">
         {/* New student form */}
+        <div ref={formCardRef}>
         <Card>
           <CardHeader
             title={editingId ? "Edit Student" : "Add New Student"}
@@ -501,6 +512,16 @@ export default function StudentEntry() {
                   <option key={c}>{c}</option>
                 ))}
               </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="admittedOn">Admission Date</Label>
+              <Input
+                id="admittedOn"
+                type="date"
+                value={form.admittedOn}
+                onChange={(e) => update("admittedOn", e.target.value)}
+              />
             </div>
 
             {streamRequired && (
@@ -646,6 +667,7 @@ export default function StudentEntry() {
             {error && <p className="text-sm text-rose-500">{error}</p>}
           </form>
         </Card>
+        </div>
 
         {/* Student list */}
         <Card>

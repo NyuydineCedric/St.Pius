@@ -37,7 +37,7 @@ This **replaces** students, classes, teachers, and marks with a GBHS Bamenda sam
 
 | Role | Email | Password |
 | ---- | ----- | -------- |
-| Admin | `admin@gbhs-demo.cm` | `DemoAdmin123!` |
+| Admin | `stpius@gmail.com` | `stpius123@` |
 | Teacher | `teacher@gbhs-demo.cm` | `DemoTeacher123!` |
 
 Try **Report Cards → Form 4A** after seeding. Re-run anytime to reset the demo.
@@ -156,5 +156,5 @@ shipping-readiness.md  Gate checklist
 - See `shipping-readiness.md` for the remaining packaging / ops checklist.
 
 ## Demo credentials 
- Admin    admin@gbhs-demo.cm  /  DemoAdmin123!
+ Admin    stpius@gmail.com  /  stpius123@
  Teacher  teacher@gbhs-demo.cm  /  DemoTeacher123!

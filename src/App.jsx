@@ -15,7 +15,9 @@ import StudentEntry from "./pages/admin/StudentEntry";
 import StudentCards from "./pages/admin/StudentCards";
 import MarksEntry from "./pages/admin/MarksEntry";
 import Classes from "./pages/admin/Classes";
+import Promotions from "./pages/admin/Promotions";
 import ReportCards from "./pages/admin/ReportCards";
+import Mastersheet from "./pages/admin/Mastersheet";
 import Performance from "./pages/admin/Performance";
 import Activities from "./pages/admin/Activities";
 import Settings from "./pages/admin/Settings";
@@ -57,7 +59,9 @@ export default function App() {
           <Route path="/admin/student-cards" element={<StudentCards />} />
           <Route path="/admin/marks" element={<MarksEntry />} />
           <Route path="/admin/classes" element={<Classes />} />
+          <Route path="/admin/promotions" element={<Promotions />} />
           <Route path="/admin/report-cards" element={<ReportCards />} />
+          <Route path="/admin/mastersheet" element={<Mastersheet />} />
           <Route path="/admin/performance" element={<Performance />} />
           <Route path="/admin/activities" element={<Activities />} />
           <Route path="/admin/settings" element={<Settings />} />

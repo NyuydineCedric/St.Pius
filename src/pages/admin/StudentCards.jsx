@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Search, ChevronRight, User, GraduationCap } from "lucide-react";
+import { Search, ChevronRight, User, GraduationCap, CalendarDays } from "lucide-react";
 import {
   Card,
   CardHeader,
@@ -9,10 +9,26 @@ import {
 } from "../../components/ui";
 import { getClasses, getRoster } from "../../utils/api";
 import { compareClassNames } from "../../utils/subjects";
+import StudentHistoryModal from "./StudentHistoryModal";
 
-function StudentCardTile({ student }) {
+function formatAdmission(dateStr) {
+  if (!dateStr || dateStr === "—") return "—";
+  const date = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function StudentCardTile({ student, onOpen }) {
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-sm transition-shadow hover:shadow-md">
+    <button
+      type="button"
+      onClick={() => onOpen(student)}
+      className="flex flex-col overflow-hidden rounded-xl border border-[#e2e8f0] bg-white text-left shadow-sm transition-shadow hover:shadow-md hover:border-[#0ea5e9]"
+    >
       <div className="flex items-start gap-3 border-b border-[#e2e8f0] bg-[#f8fafc] p-4">
         <div className="flex h-16 w-14 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[#e2e8f0] bg-white">
           {student.photo ? (
@@ -64,8 +80,18 @@ function StudentCardTile({ student }) {
             {student.phone && student.phone !== "—" ? student.phone : "—"}
           </dd>
         </div>
+        <div className="col-span-2 flex items-center gap-1.5 border-t border-[#e2e8f0] pt-2">
+          <CalendarDays size={12} className="text-slate-400" />
+          <dt className="text-slate-400">Admitted</dt>
+          <dd className="font-medium text-slate-700">
+            {formatAdmission(student.admittedOn)}
+          </dd>
+        </div>
       </dl>
-    </div>
+      <p className="border-t border-[#e2e8f0] bg-[#f8fafc] px-4 py-2 text-center text-[11px] font-medium text-[#0b61a6]">
+        View report cards →
+      </p>
+    </button>
   );
 }
 
@@ -76,6 +102,7 @@ export default function StudentCards() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [historyStudent, setHistoryStudent] = useState(null);
 
   useEffect(() => {
     getClasses()
@@ -198,12 +225,23 @@ export default function StudentCards() {
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {filteredRoster.map((student) => (
-                <StudentCardTile key={student.id} student={student} />
+                <StudentCardTile
+                  key={student.id}
+                  student={student}
+                  onOpen={setHistoryStudent}
+                />
               ))}
             </div>
           )}
         </Card>
       </div>
+
+      {historyStudent && (
+        <StudentHistoryModal
+          student={historyStudent}
+          onClose={() => setHistoryStudent(null)}
+        />
+      )}
     </>
   );
 }

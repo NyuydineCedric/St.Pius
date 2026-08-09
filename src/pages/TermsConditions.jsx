@@ -142,9 +142,8 @@ const TermsConditions = () => {
               <p className="text-sm text-gray-700">
                 If you have questions about these Terms & Conditions, please
                 contact us at
-                <strong> bayebrian89@gmail.com</strong> or call
-                <strong> +237 678772649</strong>
-                <strong> / +237 675717944</strong>.
+                <strong> nyuydinecedric@gmail.com</strong> or call/WhatsApp
+                <strong> +237 678 772 649</strong>.
               </p>
             </div>
           </div>
