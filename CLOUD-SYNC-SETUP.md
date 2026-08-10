@@ -97,14 +97,27 @@ set `"databaseUrl"` back to `""` and restart.
 
 ## 6. Log in
 
-The admin login (`stpius@gmail.com` / `stpius123@`) is created automatically
-the first time either side (Render or the desktop app in cloud mode)
-connects to the database — no separate setup needed.
+**Create the admin account first, before anyone else signs up.** The backend
+no longer seeds a built-in admin: it used to create the same well-known
+`stpius@gmail.com` login on every startup, which meant every deployment
+shipped with identical publicly-documented credentials, and a school that
+changed the password had it silently reset on the next restart.
 
-Teachers register themselves at the Vercel URL (**Sign up** on the login
-page) — the first account ever created becomes admin, so make sure the
-admin account exists before any teacher registers, which it will since the
-backend creates it automatically on first startup.
+Two ways to create it:
+
+- **Just register it.** Open your Vercel URL, click **Sign up**, and create
+  the account. The first account ever created becomes the admin.
+- **Or set it from Render**, useful if teachers might reach the site first.
+  On the backend service's **Environment** tab add `BOOTSTRAP_ADMIN_EMAIL`
+  and `BOOTSTRAP_ADMIN_PASSWORD`, then redeploy. These apply only when no
+  admin exists yet and never overwrite an existing account, so it is safe to
+  leave them set — though clearing them afterwards is tidier.
+
+Once the admin exists, teachers register themselves at the Vercel URL
+(**Sign up** on the login page) and come through as teachers.
+
+> If a teacher registers before you create the admin, **that teacher's
+> account becomes the admin.** Create yours first.
 
 ---
 

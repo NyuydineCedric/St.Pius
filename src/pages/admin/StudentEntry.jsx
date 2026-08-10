@@ -1,3 +1,4 @@
+import AuthImage from "../../components/AuthImage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -85,7 +86,10 @@ export default function StudentEntry() {
   }, [searchParams]);
 
   useEffect(() => {
-    getStudents()
+    // Photos are needed here: this screen both previews them and loads the
+    // edit form from these records, so without them saving a student would
+    // overwrite their stored photo with an empty one.
+    getStudents({ includePhotos: true })
       .then(setStudents)
       .catch((err) => setError(err.message));
     getClasses()
@@ -108,7 +112,7 @@ export default function StudentEntry() {
     const q = search.trim().toLowerCase();
     if (!q) return students;
     return students.filter((s) =>
-      `${s.name} ${s.id} ${s.class} ${s.guardian || ""} ${s.phone || ""}`
+      `${s.name} ${s.code || s.id} ${s.class} ${s.guardian || ""} ${s.phone || ""}`
         .toLowerCase()
         .includes(q),
     );
@@ -224,7 +228,7 @@ export default function StudentEntry() {
   async function handleDelete(student) {
     if (
       !window.confirm(
-        `Remove ${student.name} (${student.id})? Their marks will also be deleted.`,
+        `Remove ${student.name} (${student.code || student.id})? Their marks will also be deleted.`,
       )
     ) {
       return;
@@ -416,15 +420,12 @@ export default function StudentEntry() {
               <Label>Photo</Label>
               <div className="flex items-center gap-4">
                 <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
-                  {form.photo ? (
-                    <img
-                      src={form.photo}
-                      alt="Student preview"
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <User size={28} className="text-slate-300" />
-                  )}
+                  <AuthImage
+                    src={form.photo}
+                    alt="Student preview"
+                    className="h-full w-full object-cover"
+                    fallback={<User size={28} className="text-slate-300" />}
+                  />
                 </div>
                 <div className="flex flex-col gap-2">
                   <Button
@@ -717,24 +718,21 @@ export default function StudentEntry() {
             >
               {filteredStudents.map((s) => (
                 <tr
-                  key={s.id}
+                  key={s.code || s.id}
                   className="transition-colors hover:bg-[#f1f5f9]/60"
                 >
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                    {s.id}
+                    {s.code || s.id}
                   </td>
                   <td className="px-4 py-3 font-medium text-[#1e3a8a]">
                     <div className="flex items-center gap-2.5">
                       <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#e2e8f0] bg-[#f1f5f9]">
-                        {s.photo ? (
-                          <img
-                            src={s.photo}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <User size={14} className="text-slate-300" />
-                        )}
+                        <AuthImage
+                          src={s.photo}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          fallback={<User size={14} className="text-slate-300" />}
+                        />
                       </div>
                       {s.name}
                     </div>

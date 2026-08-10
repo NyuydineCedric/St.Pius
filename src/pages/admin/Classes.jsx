@@ -332,9 +332,9 @@ export default function Classes() {
                 columns={["Student ID", "Name", "Gender", "Guardian", "Phone"]}
               >
                 {roster.map((s) => (
-                  <tr key={s.id}>
+                  <tr key={s.code || s.id}>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                      {s.id}
+                      {s.code || s.id}
                     </td>
                     <td className="px-4 py-3 font-medium text-[#1e3a8a]">
                       {s.name}

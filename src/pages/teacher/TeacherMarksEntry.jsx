@@ -112,7 +112,7 @@ export default function TeacherMarksEntry() {
     const q = rosterSearch.trim().toLowerCase();
     if (!q) return roster;
     return roster.filter((s) =>
-      `${s.name} ${s.id}`.toLowerCase().includes(q),
+      `${s.name} ${s.code || s.id}`.toLowerCase().includes(q),
     );
   }, [roster, rosterSearch]);
 
@@ -367,11 +367,11 @@ export default function TeacherMarksEntry() {
             <Table columns={["Student ID", "Student Name", ...sequences.map(catLabel)]}>
               {visibleRoster.map((s) => (
                 <tr
-                  key={s.id}
+                  key={s.code || s.id}
                   className="transition-colors hover:bg-[#f1f5f9]/60"
                 >
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                    {s.id}
+                    {s.code || s.id}
                   </td>
                   <td className="px-4 py-3 font-medium text-[#1e3a8a]">
                     {s.name}

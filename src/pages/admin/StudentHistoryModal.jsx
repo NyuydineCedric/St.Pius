@@ -1,3 +1,4 @@
+import AuthImage from "../../components/AuthImage";
 import { useEffect, useMemo, useState } from "react";
 import { X, Printer, User, CalendarDays } from "lucide-react";
 import {
@@ -185,21 +186,18 @@ export default function StudentHistoryModal({ student, onClose }) {
         <div className="flex items-start justify-between gap-4 border-b border-[#e2e8f0] p-5 print:hidden">
           <div className="flex items-center gap-4">
             <div className="flex h-16 w-14 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[#e2e8f0] bg-[#f8fafc]">
-              {student.photo ? (
-                <img
-                  src={student.photo}
-                  alt={`${student.name} — photo`}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <User size={22} className="text-slate-300" />
-              )}
+              <AuthImage
+                src={student.photo}
+                alt={`${student.name} — photo`}
+                className="h-full w-full object-cover"
+                fallback={<User size={22} className="text-slate-300" />}
+              />
             </div>
             <div>
               <h3 className="text-lg font-bold tracking-tight text-[#1e3a8a]">
                 {student.name}
               </h3>
-              <p className="font-mono text-xs text-slate-400">{student.id}</p>
+              <p className="font-mono text-xs text-slate-400">{student.code || student.id}</p>
               <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
                 <CalendarDays size={13} className="text-slate-400" />
                 Admitted: {formatAdmission(student.admittedOn)}

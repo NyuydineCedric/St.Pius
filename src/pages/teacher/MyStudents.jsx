@@ -116,7 +116,7 @@ export default function MyStudents() {
     const q = rosterSearch.trim().toLowerCase();
     if (!q) return roster;
     return roster.filter((s) =>
-      `${s.name} ${s.id} ${s.gender || ""}`.toLowerCase().includes(q),
+      `${s.name} ${s.code || s.id} ${s.gender || ""}`.toLowerCase().includes(q),
     );
   }, [roster, rosterSearch]);
 
@@ -274,10 +274,10 @@ export default function MyStudents() {
             </thead>
             <tbody className="divide-y divide-[#e2e8f0]">
               {filteredRoster.map((s, index) => (
-                <tr key={s.id} className="hover:bg-[#f1f5f9]">
+                <tr key={s.code || s.id} className="hover:bg-[#f1f5f9]">
                   <td className="px-4 py-3 text-slate-400">{index + 1}</td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                    {s.id}
+                    {s.code || s.id}
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-700">
                     {s.name}

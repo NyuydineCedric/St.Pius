@@ -35,6 +35,7 @@ import {
   getStudents,
   getActivities,
   getTeachers,
+  getLicense,
 } from "../utils/api";
 
 // Admin navigation
@@ -173,6 +174,7 @@ export default function Layout() {
   const [settings, setSettings] = useState(null);
   const [headerSearch, setHeaderSearch] = useState("");
   const [allStudents, setAllStudents] = useState([]);
+  const [license, setLicense] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchWrapRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
@@ -233,6 +235,16 @@ export default function Layout() {
       });
   }, [location.pathname]);
 
+  // Licence state drives the read-only banner. Checked once per session
+  // rather than per navigation — it only changes on activation or expiry.
+  useEffect(() => {
+    getLicense()
+      .then(setLicense)
+      .catch(() => {
+        /* older backend without /api/license — show no banner */
+      });
+  }, []);
+
   useEffect(() => {
     if (!user?.id) {
       setLastSeen(0);
@@ -282,7 +294,7 @@ export default function Layout() {
     const q = headerSearch.trim().toLowerCase();
     if (!q) return [];
     return allStudents
-      .filter((s) => `${s.name} ${s.id} ${s.class}`.toLowerCase().includes(q))
+      .filter((s) => `${s.name} ${s.code || s.id} ${s.class}`.toLowerCase().includes(q))
       .slice(0, 8);
   }, [allStudents, headerSearch]);
 
@@ -388,6 +400,46 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-[#f1f5f9] font-sans text-[#1e293b] antialiased">
+      {/* Read-only notice. Shown whenever the backend is refusing writes, so
+          staff find out before typing a term's marks into a form that can't
+          be saved — not after. Printing and backups still work, and the text
+          says so. */}
+      {license?.readOnly && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 print:hidden"
+        >
+          <span className="font-semibold">Read-only —</span>
+          <span>{license.message}</span>
+          {user?.role === "admin" && (
+            <NavLink
+              to="/admin/settings"
+              className="font-semibold underline underline-offset-2 hover:text-amber-950"
+            >
+              Enter a licence key
+            </NavLink>
+          )}
+        </div>
+      )}
+      {/* Expiry warning, while still licensed. Four weeks of notice so a
+          renewal doesn't collide with end-of-term reports. */}
+      {license &&
+        !license.readOnly &&
+        license.daysRemaining >= 0 &&
+        license.daysRemaining <= 28 && (
+          <div
+            role="status"
+            className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-center text-sm text-blue-900 print:hidden"
+          >
+            Licence expires in{" "}
+            <span className="font-semibold">
+              {license.daysRemaining === 0
+                ? "less than a day"
+                : `${license.daysRemaining} day${license.daysRemaining === 1 ? "" : "s"}`}
+            </span>
+            . Renew before then to keep saving changes.
+          </div>
+        )}
       <div className="flex min-h-screen">
         {/* Dimmed backdrop behind the mobile drawer — tap to close. Only
             ever rendered below the lg breakpoint. */}
@@ -587,7 +639,7 @@ export default function Layout() {
                                 {s.name}
                               </span>
                               <span className="text-xs text-slate-400">
-                                {s.id} · {s.class}
+                                {s.code || s.id} · {s.class}
                                 {s.option ? ` · ${s.option}` : ""}
                               </span>
                             </button>
