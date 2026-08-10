@@ -19,6 +19,10 @@ import java.security.spec.KeySpec;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class Main {
 
@@ -29,6 +33,28 @@ public class Main {
     // PostgresDataStore instead. Nothing else in this file needs to know
     // or care which one is active.
     private static DataStore store;
+
+    // Writable data directory, kept so the restore handler can drop a
+    // pre-restore snapshot somewhere sensible on both storage backends.
+    private static File dataDirectory = new File(".");
+
+    // Upper bound on an uploaded backup. Generous enough for a large school
+    // with photos, small enough that a bogus upload can't exhaust memory.
+    private static final int MAX_BACKUP_BYTES = 200 * 1024 * 1024;
+
+    /**
+     * How long tombstones are kept before being swept.
+     *
+     * Must comfortably exceed the longest realistic offline stretch: sweep a
+     * tombstone sooner than a device's last sync and that device resurrects
+     * the deleted record. A term is about 90 days.
+     */
+    private static final long SYNC_TOMBSTONE_RETENTION_DAYS = 180;
+
+    // Current licence. Replaced wholesale on activation or revalidation, so
+    // it's volatile rather than synchronised — readers only ever need the
+    // latest reference.
+    private static volatile License license = null;
 
     // In-memory sessions (Bearer tokens). Lost on process restart — users
     // simply log in again. Fine for desktop; for multi-instance cloud you
@@ -74,11 +100,26 @@ public class Main {
                 sendJson(exchange, 401, "{\"error\":\"Unauthorized\"}");
                 return;
             }
-            // Re-check the account against the store on every request, not
-            // just at login — otherwise a teacher removed from staff (whose
-            // login account gets deleted alongside them) would stay signed
-            // in and able to use the dashboard until their token expires.
-            User liveUser = store.findUserByEmail(s.email);
+            // Re-check the account against the store, so a teacher removed
+            // from staff (whose login account is deleted alongside them)
+            // stops being able to use the dashboard instead of staying signed
+            // in until their token expires.
+            //
+            // Cached briefly: at ~700ms round trip to a remote database this
+            // was the single largest cost on every authenticated request. The
+            // trade is that a deleted account keeps working for at most
+            // USER_RECHECK_TTL_MS rather than being cut off instantly.
+            User liveUser;
+            try {
+                liveUser = lookupUserCached(s.email);
+            } catch (RuntimeException e) {
+                // The database is unreachable or busy. This says nothing about
+                // whether the account is still valid, so do NOT revoke — that
+                // would turn a blip in connectivity into a permanent logout.
+                System.err.println("Auth re-check unavailable: " + e.getMessage());
+                sendJson(exchange, 503, "{\"error\":\"Service temporarily unavailable, please retry\"}");
+                return;
+            }
             if (liveUser == null || !Objects.equals(liveUser.role, s.role)) {
                 sessions.revoke(SessionStore.extractToken(exchange));
                 sendJson(exchange, 401, "{\"error\":\"Unauthorized\"}");
@@ -91,6 +132,59 @@ public class Main {
                 CURRENT.remove();
             }
         });
+    }
+
+    /**
+     * Blocks changes when the licence isn't active, while leaving reads alone.
+     *
+     * A school whose licence lapsed mid-term must still be able to open and
+     * print the report cards it has already produced — locking them out of
+     * their own records turns a billing matter into an emergency for them and
+     * a support emergency for us. So GET stays available in every state and
+     * only writes are refused.
+     */
+    private static HttpHandler requireLicense(HttpHandler handler) {
+        return exchange -> {
+            String method = exchange.getRequestMethod();
+            boolean isRead = "GET".equalsIgnoreCase(method)
+                    || "HEAD".equalsIgnoreCase(method)
+                    || "OPTIONS".equalsIgnoreCase(method);
+
+            License current = license;
+            if (!isRead && current != null && !current.allowsWrites()) {
+                sendJson(exchange, 402,
+                        "{\"error\":\"" + escapeJson(current.message) + "\",\"licenseStatus\":\""
+                                + current.status + "\",\"readOnly\":true}");
+                return;
+            }
+            handler.handle(exchange);
+        };
+    }
+
+    // Short-lived cache for the per-request account re-check above. Long
+    // enough to spare a remote round trip on every call, short enough that
+    // removing a member of staff takes effect while the admin is still
+    // looking at the screen.
+    private static final long USER_RECHECK_TTL_MS = 30_000;
+    private static final ConcurrentHashMap<String, Object[]> USER_CACHE = new ConcurrentHashMap<>();
+
+    private static User lookupUserCached(String email) {
+        if (email == null)
+            return null;
+        String key = email.toLowerCase(Locale.ROOT);
+        Object[] hit = USER_CACHE.get(key);
+        if (hit != null && (Long) hit[1] > System.currentTimeMillis())
+            return (User) hit[0];
+
+        User fresh = store.findUserByEmail(email);
+        USER_CACHE.put(key, new Object[] { fresh, System.currentTimeMillis() + USER_RECHECK_TTL_MS });
+        return fresh;
+    }
+
+    /** Drops a cached account so a deletion or role change applies at once. */
+    static void invalidateUserCache(String email) {
+        if (email != null)
+            USER_CACHE.remove(email.toLowerCase(Locale.ROOT));
     }
 
     private static HttpHandler requireAdmin(HttpHandler handler) {
@@ -116,6 +210,7 @@ public class Main {
         if (!dataDir.exists()) {
             dataDir.mkdirs();
         }
+        dataDirectory = dataDir;
 
         String databaseUrl = System.getenv("DATABASE_URL");
         if (databaseUrl != null && !databaseUrl.isBlank()) {
@@ -125,10 +220,39 @@ public class Main {
         }
         store.init(dataDir);
 
-        // Guarantee a known admin login always works, on every startup —
-        // a safe upsert (ensureUser) that never touches students, classes,
-        // marks, or other staff accounts.
-        store.ensureUser("Admin", "stpius@gmail.com", Passwords.hash("stpius123@"), "admin");
+        // Creates the bucket on first run; a no-op once it exists.
+        SupabaseStorage storageForBucket = SupabaseStorage.get();
+        if (storageForBucket != null)
+            storageForBucket.ensureBucket();
+
+        license = License.load(dataDir);
+        System.out.println("Licence: " + license.status + " — " + license.message);
+        if (!license.allowsWrites())
+            System.out.println("  Running READ-ONLY: existing records can be viewed and printed, "
+                    + "but no changes can be saved.");
+
+        // Optional bootstrap admin, applied only when the store has no admin
+        // at all. With no bootstrap env vars set, the first account registered
+        // through /api/register becomes the admin (see RegisterHandler) — that
+        // is how a school install is meant to be set up.
+        //
+        // This deliberately does NOT hardcode credentials. Doing so shipped
+        // every deployment the same publicly-known admin login, and re-applying
+        // it on each boot silently reverted whatever password the school set.
+        String bootstrapEmail = System.getenv("BOOTSTRAP_ADMIN_EMAIL");
+        String bootstrapPassword = System.getenv("BOOTSTRAP_ADMIN_PASSWORD");
+        if (bootstrapEmail != null && !bootstrapEmail.isBlank()
+                && bootstrapPassword != null && !bootstrapPassword.isBlank()) {
+            if (store.hasAdmin()) {
+                System.out.println("Bootstrap admin skipped — an admin account already exists.");
+            } else {
+                String bootstrapName = System.getenv().getOrDefault("BOOTSTRAP_ADMIN_NAME", "Admin");
+                store.ensureUser(bootstrapName, bootstrapEmail.trim(),
+                        Passwords.hash(bootstrapPassword), "admin");
+                System.out.println("Bootstrap admin created for " + bootstrapEmail.trim()
+                        + " — change this password after first login.");
+            }
+        }
         store.save();
 
         // Electron always spawns this process with no PORT env var set, so
@@ -156,27 +280,128 @@ public class Main {
         server.createContext("/api/register", withCors(new RegisterHandler()));
 
         // Authenticated reads; admin-only writes where noted in handlers.
-        server.createContext("/api/students", requireAuth(new StudentsHandler()));
-        server.createContext("/api/classes", requireAuth(new ClassesHandler()));
-        server.createContext("/api/classes/master", requireAdmin(new ClassMasterHandler()));
-        server.createContext("/api/roster", requireAuth(new RosterHandler()));
-        server.createContext("/api/marks", requireAuth(new MarksHandler()));
-        server.createContext("/api/activities", requireAuth(new ActivitiesHandler()));
-        server.createContext("/api/teachers", requireAuth(new TeachersHandler()));
-        server.createContext("/api/settings", requireAuth(new SettingsHandler()));
-        server.createContext("/api/academic-years", requireAuth(new AcademicYearsHandler()));
-        // Local/demo only: wipe + load GBHS Bamenda sample data.
-        server.createContext("/api/demo/seed", withCors(new DemoSeedHandler()));
+        server.createContext("/api/students", requireAuth(requireLicense(new StudentsHandler())));
+        server.createContext("/api/classes", requireAuth(requireLicense(new ClassesHandler())));
+        server.createContext("/api/classes/master", requireAdmin(requireLicense(new ClassMasterHandler())));
+        server.createContext("/api/roster", requireAuth(requireLicense(new RosterHandler())));
+        server.createContext("/api/marks", requireAuth(requireLicense(new MarksHandler())));
+        server.createContext("/api/activities", requireAuth(requireLicense(new ActivitiesHandler())));
+        server.createContext("/api/teachers", requireAuth(requireLicense(new TeachersHandler())));
+        server.createContext("/api/settings", requireAuth(requireLicense(new SettingsHandler())));
+        server.createContext("/api/academic-years", requireAuth(requireLicense(new AcademicYearsHandler())));
+        // Wipes every student, mark, teacher and class, then loads sample
+        // data. Off unless explicitly switched on, and the route isn't even
+        // registered otherwise — a school's real data must not be one request
+        // away from being replaced by a demo set.
+        boolean demoSeedEnabled = "1".equals(System.getenv("ALLOW_DEMO_SEED"))
+                || "true".equalsIgnoreCase(System.getenv("ALLOW_DEMO_SEED"));
+        if (demoSeedEnabled) {
+            server.createContext("/api/demo/seed", withCors(requireLicense(new DemoSeedHandler())));
+            System.out.println("WARNING: demo seed endpoint is ENABLED — it erases all academic data. "
+                    + "Unset ALLOW_DEMO_SEED before shipping to a school.");
+        }
+        // Backup deliberately stays available without a licence — a school
+        // must always be able to get its own data out, whatever its billing
+        // status. Holding data hostage is never an acceptable lever.
         server.createContext("/api/backup", requireAdmin(new BackupHandler()));
-        server.createContext("/api/backup/restore", requireAdmin(new BackupRestoreHandler()));
+        // Restore IS licence-gated, unlike export. Getting your data out is a
+        // right; loading data back in is using the product.
+        server.createContext("/api/backup/restore", requireAdmin(requireLicense(new BackupRestoreHandler())));
+
+        // Changing your own password is deliberately NOT licence-gated. A
+        // school must always be able to secure its account, whatever its
+        // billing state — and rotating a leaked credential is exactly the
+        // moment you don't want a paywall.
+        server.createContext("/api/account/password", requireAuth(new ChangePasswordHandler()));
+
+        // Sync is a write path, so it is licence-gated like the rest.
+        server.createContext("/api/sync", requireAuth(requireLicense(new SyncHandler())));
+
+        server.createContext("/api/sync/status", requireAuth(new SyncStatusHandler()));
+        server.createContext("/api/sync/now", requireAdmin(new SyncNowHandler()));
+
+        server.createContext("/api/license", requireAuth(new LicenseHandler()));
+        server.createContext("/api/license/activate", requireAdmin(new LicenseActivateHandler()));
 
         // Static frontend files (the built React app). Registered last / at
         // root so it acts as the catch-all for anything not matched by an
         // /api/* context above.
         server.createContext("/", new StaticFileHandler(staticDir));
 
-        server.setExecutor(null);
+        // A null executor makes HttpServer run every handler on the dispatcher
+        // thread, so requests are served strictly one at a time — one slow
+        // query stalls everyone else. Fine for a single desktop user, not for a
+        // staffroom of teachers entering marks at once.
+        //
+        // Safe to parallelise: request state lives in a ThreadLocal, sessions
+        // are a ConcurrentHashMap, FileDataStore's methods are synchronized,
+        // and PostgresDataStore holds no mutable state.
+        int handlerThreads = 16;
+        String configuredThreads = System.getenv("HTTP_THREADS");
+        if (configuredThreads != null && !configuredThreads.isBlank()) {
+            try {
+                handlerThreads = Math.max(1, Integer.parseInt(configuredThreads.trim()));
+            } catch (NumberFormatException e) {
+                System.err.println("Ignoring invalid HTTP_THREADS=" + configuredThreads);
+            }
+        }
+        ExecutorService httpExecutor = Executors.newFixedThreadPool(handlerThreads, r -> {
+            Thread t = new Thread(r, "http-handler");
+            t.setDaemon(true);
+            return t;
+        });
+        server.setExecutor(httpExecutor);
         server.start();
+
+        // Expired sessions would otherwise pile up forever now that they're
+        // persisted. Runs hourly, and once at startup to clear out whatever
+        // expired while the process was down.
+        ScheduledExecutorService housekeeping = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "housekeeping");
+            t.setDaemon(true);
+            return t;
+        });
+        housekeeping.scheduleAtFixedRate(sessions::purgeExpired, 0, 1, TimeUnit.HOURS);
+
+        // Sweep tombstones that are older than any device could plausibly be
+        // offline. Done daily rather than on every write so a slow delete never
+        // blocks a user.
+        housekeeping.scheduleAtFixedRate(() -> {
+            try {
+                store.purgeTombstones(System.currentTimeMillis()
+                        - SYNC_TOMBSTONE_RETENTION_DAYS * 86_400_000L);
+            } catch (RuntimeException e) {
+                System.err.println("Tombstone sweep failed: " + e.getMessage());
+            }
+        }, 1, 24, TimeUnit.HOURS);
+
+        // Desktop sync loop. Failure is silent and expected — a school being
+        // offline is the normal case this exists for, not an error state.
+        SyncClient syncClient = SyncClient.get(dataDir);
+        if (syncClient != null) {
+            housekeeping.scheduleAtFixedRate(() -> syncClient.syncNow(store), 15, 300, TimeUnit.SECONDS);
+        }
+
+        // Revocation check, when a licence server is configured. Runs on
+        // startup and every 6 hours. Failure is silent and harmless: an
+        // unreachable server leaves the licence exactly as it was, so a school
+        // never loses access because something on our side is down.
+        if (System.getenv("LICENSE_SERVER_URL") != null
+                && !System.getenv("LICENSE_SERVER_URL").isBlank()) {
+            housekeeping.scheduleAtFixedRate(() -> {
+                License before = license;
+                if (before == null)
+                    return;
+                License after = before.revalidate(dataDirectory);
+                if (after.status != before.status) {
+                    license = after;
+                    System.out.println("Licence status changed: " + before.status + " -> " + after.status);
+                }
+                if (License.graceExhausted(dataDirectory))
+                    System.out.println("WARNING: licence server unreachable for over "
+                            + License.daysSinceLastCheck(dataDirectory) + " days.");
+            }, 0, 6, TimeUnit.HOURS);
+        }
 
         System.out.println("Report Card backend running on http://" + bindHost + ":" + port);
         System.out.println("Storage: " + (databaseUrl != null && !databaseUrl.isBlank()
@@ -239,7 +464,11 @@ public class Main {
         }
     }
 
-    static final class Session {
+    // Serializable so the file store can persist live sessions across a
+    // desktop app restart, the same way the Postgres store does across a
+    // server restart.
+    static final class Session implements Serializable {
+        private static final long serialVersionUID = 1L;
         final String userId;
         final String email;
         final String role;
@@ -255,9 +484,20 @@ public class Main {
         }
     }
 
+    // Sessions live in the data store, not just in memory.
+    //
+    // They used to be a plain in-memory map, which meant every restart logged
+    // every user out — painful on Render's free tier, which spins the service
+    // down whenever it goes idle — and made it impossible to run more than one
+    // backend instance, since neither would recognise the other's tokens.
+    //
+    // The map below is now a cache in front of the store: the common path is
+    // still a single in-memory lookup, and only a token this process hasn't
+    // seen before (after a restart, or issued by another instance) costs a
+    // read from storage.
     static final class SessionStore {
         private static final long TTL_MS = 24L * 60 * 60 * 1000;
-        private final ConcurrentHashMap<String, Session> map = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, Session> cache = new ConcurrentHashMap<>();
         private final SecureRandom random = new SecureRandom();
 
         String create(User user) {
@@ -267,30 +507,64 @@ public class Main {
             for (byte b : bytes)
                 sb.append(String.format(Locale.ROOT, "%02x", b));
             String token = sb.toString();
-            map.put(token, new Session(user.id, user.email, user.role, user.name, System.currentTimeMillis() + TTL_MS));
+            Session session = new Session(user.id, user.email, user.role, user.name,
+                    System.currentTimeMillis() + TTL_MS);
+            cache.put(token, session);
+            try {
+                store.saveSession(token, session);
+            } catch (RuntimeException e) {
+                // A storage hiccup shouldn't block a login — the session still
+                // works on this instance until it restarts.
+                System.err.println("Could not persist session: " + e.getMessage());
+            }
             return token;
         }
 
         void revoke(String token) {
-            if (token != null)
-                map.remove(token);
+            if (token == null)
+                return;
+            cache.remove(token);
+            try {
+                store.deleteSession(token);
+            } catch (RuntimeException e) {
+                System.err.println("Could not delete persisted session: " + e.getMessage());
+            }
         }
 
         Session resolve(HttpExchange exchange) {
-            String header = exchange.getRequestHeaders().getFirst("Authorization");
-            if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7))
+            String token = extractToken(exchange);
+            if (token == null || token.isEmpty())
                 return null;
-            String token = header.substring(7).trim();
-            if (token.isEmpty())
-                return null;
-            Session s = map.get(token);
+
+            Session s = cache.get(token);
+            if (s == null) {
+                try {
+                    s = store.findSession(token);
+                } catch (RuntimeException e) {
+                    System.err.println("Could not read persisted session: " + e.getMessage());
+                    return null;
+                }
+                if (s != null)
+                    cache.put(token, s);
+            }
             if (s == null)
                 return null;
             if (s.expiresAt < System.currentTimeMillis()) {
-                map.remove(token);
+                revoke(token);
                 return null;
             }
             return s;
+        }
+
+        /** Drops expired sessions from both the cache and storage. */
+        void purgeExpired() {
+            long now = System.currentTimeMillis();
+            cache.entrySet().removeIf(e -> e.getValue().expiresAt < now);
+            try {
+                store.purgeExpiredSessions(now);
+            } catch (RuntimeException e) {
+                System.err.println("Session purge failed: " + e.getMessage());
+            }
         }
 
         static String extractToken(HttpExchange exchange) {
@@ -483,6 +757,19 @@ public class Main {
             }
 
             boolean hasAdmin = store.hasAdmin();
+
+            // Creating accounts is a write, so it needs a licence — but the
+            // very first admin must be able to register on a brand-new
+            // install, otherwise setup deadlocks: activating a licence
+            // requires an admin, and creating an admin would require a
+            // licence. Bootstrap is exempt; everyone after is not.
+            License current = license;
+            if (hasAdmin && current != null && !current.allowsWrites()) {
+                sendJson(exchange, 402,
+                        "{\"error\":\"" + escapeJson(current.message) + "\",\"readOnly\":true}");
+                return;
+            }
+
             Session caller = sessions.resolve(exchange);
             if ("admin".equals(role)) {
                 if (hasAdmin && (caller == null || !"admin".equals(caller.role))) {
@@ -599,16 +886,31 @@ public class Main {
             String[] parts = path.split("/");
 
             if ("GET".equalsIgnoreCase(method) && parts.length == 3) {
+                // Photos are omitted by default — see toJsonWithoutPhoto. Pass
+                // ?includePhotos=1 when the caller genuinely needs them (the
+                // student editor does, since it saves the form back and would
+                // otherwise blank out the photo it never received).
+                String query = exchange.getRequestURI().getQuery();
+                boolean includePhotos = query != null
+                        && (query.contains("includePhotos=1") || query.contains("includePhotos=true"));
+
                 List<Student> list = store.getStudents();
                 StringBuilder sb = new StringBuilder();
                 sb.append('[');
                 for (int i = 0; i < list.size(); i++) {
                     if (i > 0)
                         sb.append(',');
-                    sb.append(list.get(i).toJson());
+                    sb.append(includePhotos ? list.get(i).toApiJson() : list.get(i).toJsonWithoutPhoto());
                 }
                 sb.append(']');
                 sendJson(exchange, 200, sb.toString());
+                return;
+            }
+
+            // GET /api/students/{id}/photo — readable by any signed-in user,
+            // same as the roster it appears alongside.
+            if ("GET".equalsIgnoreCase(method) && parts.length == 5 && "photo".equals(parts[4])) {
+                StudentPhoto.serve(exchange, parts[3]);
                 return;
             }
 
@@ -631,8 +933,13 @@ public class Main {
                         obj.getOrDefault("electives", ""),
                         obj.getOrDefault("photo", ""),
                         obj.getOrDefault("admittedOn", ""));
+                // The student ID is only known once the store has assigned it,
+                // so the photo moves to Storage on a second pass.
+                String stored = storePhotoIfPossible(s.id, s.photo);
+                if (!stored.equals(s.photo))
+                    s = store.updateStudent(s.id, Map.of("photo", stored));
                 store.save();
-                sendJson(exchange, 201, s.toJson());
+                sendJson(exchange, 201, s.toApiJson());
                 return;
             }
 
@@ -641,13 +948,19 @@ public class Main {
                 if ("PUT".equalsIgnoreCase(method)) {
                     String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                     Map<String, String> obj = parseJsonObject(body);
+                    // A newly-taken photo arrives inline; move it to Storage
+                    // before it ever reaches the database.
+                    if (obj.containsKey("photo")) {
+                        obj = new HashMap<>(obj);
+                        obj.put("photo", storePhotoIfPossible(studentId, obj.get("photo")));
+                    }
                     Student updated = store.updateStudent(studentId, obj);
                     if (updated == null) {
                         sendJson(exchange, 404, "{\"error\":\"Student not found\"}");
                         return;
                     }
                     store.save();
-                    sendJson(exchange, 200, updated.toJson());
+                    sendJson(exchange, 200, updated.toApiJson());
                     return;
                 }
                 if ("DELETE".equalsIgnoreCase(method)) {
@@ -765,7 +1078,7 @@ public class Main {
             for (int i = 0; i < roster.size(); i++) {
                 if (i > 0)
                     sb.append(',');
-                sb.append(roster.get(i).toJson());
+                sb.append(roster.get(i).toApiJson());
             }
             sb.append(']');
             sendJson(exchange, 200, sb.toString());
@@ -1005,6 +1318,10 @@ public class Main {
                 store.deleteTeacher(teacherId);
                 if (email != null) {
                     store.deleteTeacherAccountByEmail(email);
+                    // Drop the cached auth re-check so the removed teacher is
+                    // locked out on their very next request, not up to
+                    // USER_RECHECK_TTL_MS later.
+                    invalidateUserCache(email);
                 }
                 store.save();
                 sendJson(exchange, 200, "{\"status\":\"ok\"}");
@@ -1077,22 +1394,20 @@ public class Main {
                 return;
             }
 
-            Session caller = sessions.resolve(exchange);
-            boolean admin = caller != null && "admin".equals(caller.role);
-            boolean loopback = exchange.getRemoteAddress() != null
-                    && exchange.getRemoteAddress().getAddress() != null
-                    && exchange.getRemoteAddress().getAddress().isLoopbackAddress();
+            // Reaching this handler at all means ALLOW_DEMO_SEED was set, so
+            // this is the second gate rather than the only one.
+            //
+            // Being an admin is deliberately NOT sufficient on its own. This
+            // erases every student, mark, teacher and class, and the admin is
+            // exactly the person who would trigger it by accident; the shared
+            // key makes it a decision rather than a misclick.
             String expectedKey = System.getenv("DEMO_SEED_KEY");
             if (expectedKey == null || expectedKey.isBlank())
                 expectedKey = "demo";
             String provided = exchange.getRequestHeaders().getFirst("X-Demo-Seed-Key");
-            boolean keyOk = expectedKey.equals(provided);
-            boolean allowEnv = "1".equals(System.getenv("ALLOW_DEMO_SEED"))
-                    || "true".equalsIgnoreCase(System.getenv("ALLOW_DEMO_SEED"));
-
-            if (!admin && !(loopback && keyOk) && !(allowEnv && keyOk)) {
+            if (!expectedKey.equals(provided)) {
                 sendJson(exchange, 403,
-                        "{\"error\":\"Demo seed denied. Log in as admin, or call from localhost with X-Demo-Seed-Key.\"}");
+                        "{\"error\":\"Demo seed denied — a valid X-Demo-Seed-Key header is required.\"}");
                 return;
             }
 
@@ -1123,9 +1438,10 @@ public class Main {
         }
     }
 
-    // GET /api/backup — admin only. Streams the raw local data file (the
-    // same one FileDataStore reads/writes) so an admin can save it
-    // somewhere safe (USB drive, cloud folder, email to themselves).
+    // GET /api/backup — admin only. Exports the whole database as JSON so an
+    // admin can save it somewhere safe (USB drive, cloud folder, email to
+    // themselves). Works on both storage backends: cloud/Postgres deployments
+    // need this most, since Supabase's free tier has no automated backups.
     static class BackupHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -1133,24 +1449,17 @@ public class Main {
                 sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
                 return;
             }
-            File f = store.getBackupFile();
-            if (f == null) {
-                sendJson(exchange, 400,
-                        "{\"error\":\"Backups aren't needed here — this server stores data in a managed database, not a local file.\"}");
-                return;
-            }
-            // Flush whatever is currently in memory before handing out the
-            // file, so the download always reflects the latest saved marks.
+            // Flush whatever is currently in memory first, so the download
+            // always reflects the latest saved marks.
             store.save();
-            if (!f.exists()) {
-                sendJson(exchange, 404, "{\"error\":\"No data has been saved yet\"}");
-                return;
-            }
-            byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+
             String stamp = java.time.LocalDate.now().toString();
-            exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+            byte[] data = Backup.export(store, java.time.Instant.now().toString())
+                    .getBytes(StandardCharsets.UTF_8);
+
+            exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
             exchange.getResponseHeaders().add("Content-Disposition",
-                    "attachment; filename=\"report-card-backup-" + stamp + ".ser\"");
+                    "attachment; filename=\"report-card-backup-" + stamp + ".json\"");
             exchange.sendResponseHeaders(200, data.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(data);
@@ -1158,10 +1467,14 @@ public class Main {
         }
     }
 
-    // POST /api/backup/restore — admin only. Body is the raw bytes of a file
-    // previously downloaded from /api/backup. Validates it before touching
-    // anything on disk, keeps a safety copy of whatever was live, then
-    // reloads the running server from the restored file (no restart needed).
+    // POST /api/backup/restore — admin only. Body is a JSON file previously
+    // downloaded from /api/backup. Parses and validates it in full before
+    // touching stored data, snapshots what's currently live, then applies the
+    // restore in place (no restart needed).
+    //
+    // Parsing is deliberately plain JSON. This used to call readObject() on
+    // the uploaded bytes, which let a malicious backup file execute code on
+    // the server — an admin only had to be talked into restoring it.
     static class BackupRestoreHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -1169,47 +1482,500 @@ public class Main {
                 sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
                 return;
             }
-            File f = store.getBackupFile();
-            if (f == null) {
-                sendJson(exchange, 400,
-                        "{\"error\":\"Restoring from a file isn't supported here — this server stores data in a managed database.\"}");
-                return;
-            }
             byte[] uploaded = exchange.getRequestBody().readAllBytes();
             if (uploaded.length == 0) {
                 sendJson(exchange, 400, "{\"error\":\"No file received\"}");
                 return;
             }
-            try (ObjectInputStream ois = new ObjectInputStream(new java.io.ByteArrayInputStream(uploaded))) {
-                Object obj = ois.readObject();
-                if (!(obj instanceof Map)) {
-                    throw new IOException("Not a valid backup file");
-                }
-            } catch (Exception ex) {
-                sendJson(exchange, 400, "{\"error\":\"That file doesn't look like a valid backup\"}");
+            if (uploaded.length > MAX_BACKUP_BYTES) {
+                sendJson(exchange, 413, "{\"error\":\"That file is too large to be a backup\"}");
                 return;
             }
+
+            // Parse and validate fully before touching any stored data. This
+            // is plain JSON parsing — it builds maps and lists only, and can
+            // never instantiate arbitrary classes the way the previous
+            // ObjectInputStream restore could.
+            Map<String, Object> parsed;
+            String summary;
             try {
-                File safety = new File(f.getAbsolutePath() + ".pre-restore.bak");
-                if (f.exists()) {
-                    java.nio.file.Files.copy(f.toPath(), safety.toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                }
-            } catch (IOException ignored) {
-                // Best-effort safety copy — never block a restore over it.
+                parsed = Json.parseObject(new String(uploaded, StandardCharsets.UTF_8));
+                summary = Backup.describe(parsed);
+            } catch (Json.ParseException | Backup.InvalidBackupException ex) {
+                sendJson(exchange, 400, "{\"error\":\"" + escapeJson(ex.getMessage()) + "\"}");
+                return;
             }
-            java.nio.file.Files.write(f.toPath(), uploaded);
-            store.reload();
-            store.logActivity("backup", "Data restored from an uploaded backup file");
+
+            // Snapshot what's live right now, so a restore that turns out to be
+            // the wrong file is recoverable. Written next to the data dir for
+            // the file store; for Postgres it is the only pre-restore copy that
+            // exists, which matters on plans without automated backups.
+            try {
+                File safety = new File(dataDirectory, "pre-restore-" + System.currentTimeMillis() + ".json");
+                java.nio.file.Files.write(safety.toPath(),
+                        Backup.export(store, java.time.Instant.now().toString()).getBytes(StandardCharsets.UTF_8));
+                System.out.println("Pre-restore snapshot written to " + safety.getAbsolutePath());
+            } catch (Exception ex) {
+                // Best-effort — never block a restore over it, but say so.
+                System.err.println("Could not write pre-restore snapshot: " + ex.getMessage());
+            }
+
+            try {
+                Backup.apply(store, parsed);
+            } catch (RuntimeException ex) {
+                sendJson(exchange, 500,
+                        "{\"error\":\"Restore failed part-way: " + escapeJson(String.valueOf(ex.getMessage())) + "\"}");
+                return;
+            }
+            store.logActivity("backup", "Data restored from an uploaded backup (" + summary + ")");
             store.save();
+            sendJson(exchange, 200, "{\"status\":\"ok\",\"restored\":\"" + escapeJson(summary) + "\"}");
+        }
+    }
+
+    // One recorded mark, flattened out of whatever shape each store keeps
+    // internally. Used only by the backup export.
+    static class MarkRow {
+        final String academicYear, className, subject, sequence, studentId;
+        final double score;
+        /** Change time, so two devices merge per cell rather than per class. */
+        long updatedAt;
+
+        MarkRow(String academicYear, String className, String subject, String sequence, String studentId,
+                double score) {
+            this.academicYear = academicYear;
+            this.className = className;
+            this.subject = subject;
+            this.sequence = sequence;
+            this.studentId = studentId;
+            this.score = score;
+        }
+    }
+
+    /**
+     * Moves an inline photo into Supabase Storage and returns the object path
+     * to save instead.
+     *
+     * Returns the original data URL untouched when storage isn't configured or
+     * the upload fails — a storage outage must degrade to the old inline
+     * behaviour, never drop a photo the admin just took.
+     */
+    private static String storePhotoIfPossible(String studentId, String photo) {
+        SupabaseStorage storage = SupabaseStorage.get();
+        if (storage == null || !SupabaseStorage.isDataUrl(photo))
+            return photo;
+        String path = storage.uploadDataUrl(photo, SupabaseStorage.studentPhotoPath(studentId));
+        return path != null ? path : photo;
+    }
+
+    // GET /api/students/{id}/photo — serves a student's photo.
+    //
+    // The bucket is private (these are children's photographs), so bytes are
+    // fetched server-side for an already-authenticated caller rather than
+    // handing out a public URL. Responses carry an ETag and a private
+    // cache directive so a browser re-uses them instead of re-fetching a
+    // class full of photos on every navigation.
+    static final class StudentPhoto {
+        static void serve(HttpExchange exchange, String studentId) throws IOException {
+            Student student = null;
+            for (Student s : store.getStudents())
+                if (s.id.equals(studentId)) {
+                    student = s;
+                    break;
+                }
+            if (student == null || student.photo == null || student.photo.isEmpty()) {
+                sendJson(exchange, 404, "{\"error\":\"No photo for that student\"}");
+                return;
+            }
+
+            byte[] bytes;
+            String contentType = "image/jpeg";
+            if (SupabaseStorage.isDataUrl(student.photo)) {
+                // Legacy record still inline in the database.
+                int comma = student.photo.indexOf(',');
+                try {
+                    bytes = Base64.getDecoder().decode(student.photo.substring(comma + 1));
+                } catch (RuntimeException e) {
+                    sendJson(exchange, 500, "{\"error\":\"Stored photo is corrupt\"}");
+                    return;
+                }
+            } else {
+                SupabaseStorage storage = SupabaseStorage.get();
+                bytes = storage == null ? null : storage.download(student.photo);
+                if (bytes == null) {
+                    sendJson(exchange, 502, "{\"error\":\"Photo storage is unavailable\"}");
+                    return;
+                }
+            }
+
+            String etag = "\"" + Integer.toHexString(java.util.Arrays.hashCode(bytes)) + "\"";
+            String ifNoneMatch = exchange.getRequestHeaders().getFirst("If-None-Match");
+            if (etag.equals(ifNoneMatch)) {
+                exchange.sendResponseHeaders(304, -1);
+                exchange.close();
+                return;
+            }
+
+            exchange.getResponseHeaders().add("Content-Type", contentType);
+            exchange.getResponseHeaders().add("ETag", etag);
+            // "private" so shared proxies never hold a pupil's photograph.
+            exchange.getResponseHeaders().add("Cache-Control", "private, max-age=3600");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    // POST /api/account/password {"currentPassword":"...","newPassword":"..."}
+    // Changes the signed-in user's own password. There was previously no way
+    // to do this at all, so a school could never rotate a credential that had
+    // leaked — including the well-known one earlier builds seeded.
+    static class ChangePasswordHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            Session session = CURRENT.get();
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> obj = parseJsonObject(body);
+            String current = obj.getOrDefault("currentPassword", "");
+            String next = obj.getOrDefault("newPassword", "");
+
+            if (next.length() < 8) {
+                sendJson(exchange, 400,
+                        "{\"error\":\"New password must be at least 8 characters\"}");
+                return;
+            }
+
+            User user = store.findUserByEmail(session.email);
+            if (user == null) {
+                sendJson(exchange, 401, "{\"error\":\"Account no longer exists\"}");
+                return;
+            }
+            // Re-check the current password even though the caller is already
+            // authenticated, so a borrowed unlocked screen can't be used to
+            // take the account over.
+            if (!Passwords.matches(current, user.password)) {
+                sendJson(exchange, 403, "{\"error\":\"Current password is incorrect\"}");
+                return;
+            }
+            if (Passwords.matches(next, user.password)) {
+                sendJson(exchange, 400, "{\"error\":\"New password must be different from the current one\"}");
+                return;
+            }
+
+            store.updateUserPassword(user.id, Passwords.hash(next));
+            store.save();
+            invalidateUserCache(user.email);
+            store.logActivity("Security", "Password changed for " + user.email);
             sendJson(exchange, 200, "{\"status\":\"ok\"}");
+        }
+    }
+
+    /**
+     * POST /api/sync — two-way merge for offline-capable clients.
+     *
+     * Request:  {"since": <millis>, "changes": {"students":[…],"teachers":[…],"marks":[…]}}
+     * Response: {"serverTime": <millis>, "changes": {…}, "applied": {…}}
+     *
+     * The client sends what changed locally since its last successful sync and
+     * gets back everything the server has seen since then.
+     *
+     * `serverTime` is the cursor to send as `since` next time. It is
+     * deliberately the SERVER's clock: a client using its own would silently
+     * skip or re-send changes whenever its clock drifts, and on cheap hardware
+     * with a flat CMOS battery that is routine rather than exotic. Every
+     * updatedAt written here is server-stamped for the same reason, so
+     * last-write-wins compares like with like.
+     */
+    static class SyncHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+
+            Map<String, Object> body;
+            try {
+                body = Json.parseObject(
+                        new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            } catch (Json.ParseException e) {
+                sendJson(exchange, 400, "{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+                return;
+            }
+
+            long since = (long) Json.getDouble(body, "since", 0);
+            Session caller = CURRENT.get();
+            boolean admin = caller != null && "admin".equals(caller.role);
+
+            // Read the cursor BEFORE applying anything. Stamping it afterwards
+            // would exclude changes that landed while this request was running,
+            // and the client would never see them.
+            long serverTime = System.currentTimeMillis();
+
+            int appliedStudents = 0, appliedTeachers = 0, appliedMarks = 0, rejected = 0;
+            Map<String, Object> incoming = Json.getObject(body, "changes");
+
+            if (incoming != null) {
+                // Teachers may push marks (that is the whole point of letting
+                // them work offline) but must not push student or staff
+                // records — the same rule the REST handlers enforce.
+                for (Map<String, Object> m : Json.getObjectList(incoming, "marks")) {
+                    MarkRow row = new MarkRow(
+                            Json.getString(m, "academicYear", ""),
+                            Json.getString(m, "className", ""),
+                            Json.getString(m, "subject", ""),
+                            Json.getString(m, "sequence", ""),
+                            Json.getString(m, "studentId", ""),
+                            Json.getDouble(m, "score", 0));
+                    if (row.className.isBlank() || row.studentId.isBlank()) {
+                        rejected++;
+                        continue;
+                    }
+                    if (!admin && !teacherCanAccessMarks(caller, row.className, row.subject)) {
+                        rejected++;
+                        continue;
+                    }
+                    row.updatedAt = clampToNow(Json.getDouble(m, "updatedAt", serverTime), serverTime);
+                    if (store.mergeMark(row))
+                        appliedMarks++;
+                }
+
+                if (admin) {
+                    for (Map<String, Object> st : Json.getObjectList(incoming, "students")) {
+                        String id = Json.getString(st, "id", "");
+                        if (id.isBlank()) {
+                            rejected++;
+                            continue;
+                        }
+                        Student s = new Student(id,
+                                Json.getString(st, "name", ""),
+                                Json.getString(st, "class", Json.getString(st, "className", "")),
+                                Json.getString(st, "gender", ""),
+                                Json.getString(st, "guardian", ""),
+                                Json.getString(st, "phone", ""),
+                                Json.getString(st, "dob", ""),
+                                Json.getString(st, "option", ""),
+                                Json.getString(st, "electives", ""));
+                        s.code = Json.getString(st, "code", id);
+                        s.status = Json.getString(st, "status", "Active");
+                        s.photo = Json.getString(st, "photo", "");
+                        s.admittedOn = Json.getString(st, "admittedOn", "");
+                        s.updatedAt = clampToNow(Json.getDouble(st, "updatedAt", serverTime), serverTime);
+                        double deleted = Json.getDouble(st, "deletedAt", 0);
+                        s.deletedAt = deleted > 0 ? (long) deleted : null;
+                        if (store.mergeStudent(s))
+                            appliedStudents++;
+                    }
+                    for (Map<String, Object> t : Json.getObjectList(incoming, "teachers")) {
+                        String id = Json.getString(t, "id", "");
+                        if (id.isBlank()) {
+                            rejected++;
+                            continue;
+                        }
+                        Teacher teacher = new Teacher(id, Json.getString(t, "name", ""),
+                                Json.getString(t, "email", ""), Json.getString(t, "phone", ""));
+                        teacher.updatedAt = clampToNow(Json.getDouble(t, "updatedAt", serverTime), serverTime);
+                        if (store.mergeTeacher(teacher))
+                            appliedTeachers++;
+                    }
+                } else if (!Json.getObjectList(incoming, "students").isEmpty()
+                        || !Json.getObjectList(incoming, "teachers").isEmpty()) {
+                    rejected += Json.getObjectList(incoming, "students").size()
+                            + Json.getObjectList(incoming, "teachers").size();
+                }
+            }
+            if (appliedStudents + appliedTeachers + appliedMarks > 0)
+                store.save();
+
+            StringBuilder sb = new StringBuilder(1 << 14);
+            sb.append("{\"serverTime\":").append(serverTime);
+            sb.append(",\"applied\":{\"students\":").append(appliedStudents)
+                    .append(",\"teachers\":").append(appliedTeachers)
+                    .append(",\"marks\":").append(appliedMarks)
+                    .append(",\"rejected\":").append(rejected).append('}');
+
+            sb.append(",\"changes\":{\"students\":[");
+            List<Student> students = store.studentsChangedSince(since);
+            for (int i = 0; i < students.size(); i++) {
+                if (i > 0)
+                    sb.append(',');
+                sb.append(students.get(i).toSyncJson());
+            }
+            sb.append("],\"teachers\":[");
+            List<Teacher> teachers = store.teachersChangedSince(since);
+            for (int i = 0; i < teachers.size(); i++) {
+                Teacher t = teachers.get(i);
+                if (i > 0)
+                    sb.append(',');
+                sb.append("{\"id\":").append(Json.str(t.id))
+                        .append(",\"name\":").append(Json.str(t.name))
+                        .append(",\"email\":").append(Json.str(t.email))
+                        .append(",\"phone\":").append(Json.str(t.phone))
+                        .append(",\"updatedAt\":").append(t.updatedAt).append('}');
+            }
+            sb.append("],\"marks\":[");
+            List<MarkRow> marks = store.marksChangedSince(since);
+            for (int i = 0; i < marks.size(); i++) {
+                MarkRow m = marks.get(i);
+                if (i > 0)
+                    sb.append(',');
+                sb.append("{\"academicYear\":").append(Json.str(m.academicYear))
+                        .append(",\"className\":").append(Json.str(m.className))
+                        .append(",\"subject\":").append(Json.str(m.subject))
+                        .append(",\"sequence\":").append(Json.str(m.sequence))
+                        .append(",\"studentId\":").append(Json.str(m.studentId))
+                        .append(",\"score\":").append(m.score)
+                        .append(",\"updatedAt\":").append(m.updatedAt).append('}');
+            }
+            sb.append("]}}");
+            sendJson(exchange, 200, sb.toString());
+        }
+    }
+
+    /**
+     * Client timestamps are honoured for ordering but never allowed past the
+     * server's clock.
+     *
+     * A device whose clock runs fast would otherwise stamp changes into the
+     * future. Those rows sit permanently beyond every cursor the server hands
+     * out, so the client re-receives them on every sync, forever. Clamping
+     * keeps "this was edited at T while offline" meaningful while making the
+     * server's clock the ceiling — which is the same reason the cursor itself
+     * is server-issued. A clock that is merely slow is fine and needs no
+     * special handling: those changes simply lose a conflict they would have
+     * lost anyway.
+     */
+    private static long clampToNow(double clientSupplied, long serverTime) {
+        long value = (long) clientSupplied;
+        if (value <= 0 || value > serverTime)
+            return serverTime;
+        return value;
+    }
+
+    // GET /api/sync/status — what the desktop's sync is doing, for the UI.
+    // Silent sync is how people stop trusting a tool, so this is surfaced
+    // rather than left to the logs.
+    static class SyncStatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            SyncClient client = SyncClient.get(dataDirectory);
+            if (client == null) {
+                sendJson(exchange, 200, "{\"configured\":false}");
+                return;
+            }
+            sendJson(exchange, 200, client.statusJson(store));
+        }
+    }
+
+    // POST /api/sync/now — admin-triggered sync, for "I'm online now, go".
+    static class SyncNowHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            SyncClient client = SyncClient.get(dataDirectory);
+            if (client == null) {
+                sendJson(exchange, 400, "{\"error\":\"Sync isn't set up on this machine\"}");
+                return;
+            }
+            boolean ok = client.syncNow(store);
+            sendJson(exchange, ok ? 200 : 502, client.statusJson(store));
+        }
+    }
+
+    // GET /api/license — current licence state, for the banner in the UI.
+    static class LicenseHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            License current = license;
+            if (current == null) {
+                sendJson(exchange, 200, "{\"status\":\"MISSING\",\"readOnly\":false,\"message\":\"\"}");
+                return;
+            }
+            sendJson(exchange, 200, current.toJson());
+        }
+    }
+
+    // POST /api/license/activate {"key":"..."} — admin only. Verifies the key
+    // and, if good, stores it so it survives a restart.
+    static class LicenseActivateHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            String key = parseJsonObject(body).getOrDefault("key", "").trim();
+            if (key.isEmpty()) {
+                sendJson(exchange, 400, "{\"error\":\"No licence key supplied\"}");
+                return;
+            }
+
+            License candidate = License.verify(key);
+            if (candidate.status != License.Status.ACTIVE) {
+                // Rejected keys are never written to disk, so a bad paste
+                // can't knock a working licence out.
+                sendJson(exchange, 400, "{\"error\":\"" + escapeJson(candidate.message) + "\",\"status\":\""
+                        + candidate.status + "\"}");
+                return;
+            }
+
+            try {
+                java.nio.file.Files.writeString(new File(dataDirectory, "license.key").toPath(), key);
+            } catch (IOException e) {
+                sendJson(exchange, 500,
+                        "{\"error\":\"Licence is valid but could not be saved: " + escapeJson(e.getMessage()) + "\"}");
+                return;
+            }
+
+            license = candidate;
+            store.logActivity("Licence", "Licence activated for " + candidate.school
+                    + " (expires " + candidate.expires + ")");
+            sendJson(exchange, 200, candidate.toJson());
         }
     }
 
     // Data classes — shared by both storage backends.
     static class Student implements Serializable {
         private static final long serialVersionUID = 1L;
-        String id, name, className, gender, guardian, phone, dob, option, electives, status;
+        /**
+         * Internal identity. A UUID for anything created from now on.
+         *
+         * It used to be a sequential "SPXCC0042", which two devices working
+         * offline would both mint for different students — and since marks are
+         * keyed by student id, the collision would silently land one child's
+         * marks on another's report card. Records created before this change
+         * keep their old id: they are already unique within their own store,
+         * and re-keying them would mean rewriting every mark that points at
+         * them for no safety gain.
+         */
+        String id;
+        /**
+         * The number humans see — on rosters, report cards and student cards.
+         * Still sequential and still "SPXCC0042", because schools read these
+         * aloud and write them on paper; a UUID would be a real regression.
+         * Purely presentational: nothing references a student by code.
+         */
+        String code;
+        String name, className, gender, guardian, phone, dob, option, electives, status;
+        /** When this row last changed, epoch millis. Drives last-write-wins. */
+        long updatedAt;
+        /**
+         * Set when the record is deleted, instead of dropping the row.
+         *
+         * A device that was offline when a pupil was withdrawn cannot learn
+         * about a row that simply disappeared, so on reconnect it would push
+         * the pupil back. The tombstone is what lets a delete survive a merge.
+         */
+        Long deletedAt;
         // Passport-style photo, stored as a data URL (e.g. "data:image/jpeg;base64,...").
         // Resized/compressed client-side before upload, so this stays small.
         String photo;
@@ -1232,13 +1998,73 @@ public class Main {
             this.status = "Active";
             this.photo = "";
             this.admittedOn = "";
+            // Legacy records (and any caller that doesn't set one) display
+            // their id, which is exactly what they showed before.
+            this.code = id;
         }
 
         String toJson() {
             return String.format(Locale.ROOT,
-                    "{\"id\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"photo\":\"%s\",\"admittedOn\":\"%s\"}",
-                    escape(id), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
+                    "{\"id\":\"%s\",\"code\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"photo\":\"%s\",\"admittedOn\":\"%s\"}",
+                    escape(id), escape(displayCode()), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
                     escape(dob), escape(option), escape(electives), escape(status), escape(photo), escape(admittedOn));
+        }
+
+        /**
+         * JSON for API responses.
+         *
+         * The stored photo may be an inline data URL (older records, and the
+         * desktop file store) or a Supabase Storage object path. A raw storage
+         * path is meaningless to a browser, so it's rendered as the endpoint
+         * that serves the bytes. Backups deliberately use toJson() instead, so
+         * they keep the real stored value.
+         */
+        String toApiJson() {
+            if (!SupabaseStorage.isStoragePath(photo))
+                return toJson();
+            String saved = photo;
+            try {
+                photo = "/api/students/" + id + "/photo";
+                return toJson();
+            } finally {
+                photo = saved;
+            }
+        }
+
+        /**
+         * Same as toJson but with the photo replaced by a "hasPhoto" flag.
+         *
+         * Photos are base64 data URLs of ~40–80KB each, stored on the student
+         * row. Returning them for every student in the school turned the plain
+         * student list into a multi-megabyte response — and that list is
+         * fetched on every page load. Screens that actually display photos
+         * work off a single class at a time, which is a bounded payload.
+         */
+        String toJsonWithoutPhoto() {
+            return String.format(Locale.ROOT,
+                    "{\"id\":\"%s\",\"code\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"hasPhoto\":%b,\"admittedOn\":\"%s\"}",
+                    escape(id), escape(displayCode()), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
+                    escape(dob), escape(option), escape(electives), escape(status),
+                    photo != null && !photo.isEmpty(), escape(admittedOn));
+        }
+
+        /**
+         * Payload for /api/sync. Unlike toApiJson this keeps the raw stored
+         * photo (a storage path, not a URL) and carries the sync metadata, so
+         * the record can be merged verbatim on the other side.
+         */
+        String toSyncJson() {
+            StringBuilder sb = new StringBuilder(toJson());
+            sb.setLength(sb.length() - 1); // drop the closing brace
+            sb.append(",\"updatedAt\":").append(updatedAt);
+            if (deletedAt != null)
+                sb.append(",\"deletedAt\":").append(deletedAt);
+            return sb.append('}').toString();
+        }
+
+        /** Falls back to the id for records written before codes existed. */
+        String displayCode() {
+            return code == null || code.isBlank() ? id : code;
         }
 
         private String escape(String s) {
@@ -1319,6 +2145,8 @@ public class Main {
     static class Teacher implements Serializable {
         private static final long serialVersionUID = 1L;
         String id, name, email, phone;
+        /** Change time, for last-write-wins during a sync. */
+        long updatedAt;
         List<Assignment> assignments = new ArrayList<>();
 
         Teacher(String id, String name, String email, String phone) {
@@ -1508,6 +2336,74 @@ public class Main {
         /** Create or update a login account by email (demo seeding). */
         void ensureUser(String name, String email, String passwordHash, String role);
 
+        // ---- Session persistence -----------------------------------------
+        // Sessions outlive the process so a restart doesn't sign everyone out,
+        // and so a second instance recognises tokens the first one issued.
+
+        void saveSession(String token, Session session);
+
+        /** Returns null if the token is unknown. Expiry is checked by the caller. */
+        Session findSession(String token);
+
+        void deleteSession(String token);
+
+        void purgeExpiredSessions(long nowMillis);
+
+        /**
+         * Permanently removes rows tombstoned before the cutoff. Sweeping too
+         * eagerly would let a long-offline device resurrect deleted records,
+         * so callers pass a generous cutoff.
+         */
+        void purgeTombstones(long cutoffMillis);
+
+        // ---- Sync (see SyncHandler) --------------------------------------
+        // "Changed since" reads deliberately include tombstones: a deletion is
+        // a change the other side must learn about.
+
+        List<Student> studentsChangedSince(long since);
+
+        List<Teacher> teachersChangedSince(long since);
+
+        List<MarkRow> marksChangedSince(long since);
+
+        /**
+         * Applies an incoming record if it is newer than what's stored.
+         * Returns true when it won. Last-write-wins on updatedAt: adequate
+         * here because the data is naturally partitioned — a teacher edits
+         * their own class's marks, an admin edits students — so genuine
+         * concurrent edits to the same field are rare, and a CRDT's cost
+         * would buy almost nothing.
+         */
+        boolean mergeStudent(Student incoming);
+
+        boolean mergeTeacher(Teacher incoming);
+
+        boolean mergeMark(MarkRow incoming);
+
+        // ---- Backup support (see Backup.java) ----------------------------
+        // These exist so a backup can be exported and restored through this
+        // interface alone, without either store needing its own copy of the
+        // export logic.
+
+        /** Every login account, password hashes included. Admin-only paths. */
+        List<User> getUsers();
+
+        /** Every recorded mark across all academic years, flattened. */
+        List<MarkRow> getAllMarks();
+
+        /**
+         * Inserts a student with the ID it already carries, rather than
+         * generating a fresh one. Marks reference the student ID, so a restore
+         * that renumbered students would detach every score from its owner.
+         */
+        void restoreStudent(Student student);
+
+        /** Inserts a teacher, and their assignments, with the given ID. */
+        void restoreTeacher(Teacher teacher);
+
+        /** Inserts a login account with an already-hashed password. */
+        void restoreUser(User user);
+
         /**
          * The raw on-disk file backing this store, for download as a backup.
          * Returns null for stores that aren't file-based (e.g. Postgres,
@@ -1544,6 +2440,9 @@ public class Main {
         // settings.academicYear doesn't lose prior years' data, and a new
         // year always starts with nothing recorded.
         private final Map<String, Map<String, Map<String, Map<String, Map<String, Double>>>>> marksByYear = new HashMap<>();
+        // Live login sessions, persisted so closing and reopening the desktop
+        // app doesn't sign the user out mid-task.
+        private final Map<String, Session> sessionsByToken = new HashMap<>();
         private File dataFile;
 
         @Override
@@ -1576,6 +2475,7 @@ public class Main {
                     Object tc = m.get("teachers");
                     Object us = m.get("users");
                     Object st = m.get("settings");
+                    Object se = m.get("sessions");
                     students.clear();
                     classes.clear();
                     marks.clear();
@@ -1597,6 +2497,11 @@ public class Main {
                         teachers.addAll((List<Teacher>) tc);
                     if (us instanceof List)
                         users.addAll((List<User>) us);
+                    // Absent in files written before sessions were persisted —
+                    // those simply start with nobody logged in, as before.
+                    sessionsByToken.clear();
+                    if (se instanceof Map)
+                        sessionsByToken.putAll((Map<String, Session>) se);
                     if (st instanceof SchoolSettings)
                         settings = (SchoolSettings) st;
 
@@ -1690,6 +2595,7 @@ public class Main {
                     m.put("teachers", new ArrayList<>(teachers));
                     m.put("users", new ArrayList<>(users));
                     m.put("settings", settings);
+                    m.put("sessions", new HashMap<>(sessionsByToken));
                     oos.writeObject(m);
                 }
                 if (dataFile.exists()) {
@@ -1748,13 +2654,17 @@ public class Main {
         @Override
         public synchronized Student addStudent(String name, String className, String gender, String guardian,
                 String phone, String dob, String option, String electives, String photo, String admittedOn) {
-            // Bug fix: the generated ID format is "SPXCCxxxx" (no dash), but this
-            // used to search for the prefix "SPXCC-", which never matched anything —
-            // so max was always 0 and every student got "SPXCC0001". That's why
-            // every student ended up sharing one ID (and, since marks are keyed by
-            // student ID, one shared set of marks). Search for the real prefix.
-            String id = String.format("SPXCC%04d", nextNumericId("SPXCC", students, o -> ((Student) o).id));
+            // Identity is a UUID so two devices working offline can never mint
+            // the same one. The sequential "SPXCC0042" lives on as the display
+            // code, scanned across existing codes (falling back to the id for
+            // records written before codes existed) so the numbering the school
+            // already knows carries on uninterrupted.
+            String id = UUID.randomUUID().toString();
+            String code = String.format("SPXCC%04d",
+                    nextNumericId("SPXCC", students, o -> ((Student) o).displayCode()));
             Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
+            s.code = code;
+            s.updatedAt = System.currentTimeMillis();
             s.photo = photo == null ? "" : photo;
             s.admittedOn = admittedOn == null ? "" : admittedOn;
             students.add(s);
@@ -1804,6 +2714,7 @@ public class Main {
                 target.status = fields.get("status");
             if (fields.containsKey("photo"))
                 target.photo = fields.get("photo");
+            target.updatedAt = System.currentTimeMillis();
             if (fields.containsKey("admittedOn"))
                 target.admittedOn = fields.get("admittedOn");
 
@@ -1837,9 +2748,11 @@ public class Main {
                     break;
                 }
             }
-            if (target == null)
+            if (target == null || target.deletedAt != null)
                 return false;
-            students.remove(target);
+            // Tombstone rather than remove — see Student.deletedAt.
+            target.deletedAt = System.currentTimeMillis();
+            target.updatedAt = target.deletedAt;
             for (ClassInfo c : classes) {
                 if (c.name.equals(target.className) && c.students > 0)
                     c.students--;
@@ -1860,6 +2773,15 @@ public class Main {
 
         @Override
         public synchronized List<Student> getStudents() {
+            List<Student> live = new ArrayList<>(students.size());
+            for (Student s : students)
+                if (s.deletedAt == null)
+                    live.add(s);
+            return live;
+        }
+
+        /** Includes tombstones. Only the sync layer should need these. */
+        synchronized List<Student> getStudentsIncludingDeleted() {
             return new ArrayList<>(students);
         }
 
@@ -1963,8 +2885,13 @@ public class Main {
 
         @Override
         public synchronized Teacher addTeacher(String name, String email, String phone) {
-            String id = String.format("TCH-%04d", nextNumericId("TCH-", teachers, o -> ((Teacher) o).id));
+            // UUID for the same reason students use one: two devices adding
+            // staff offline would otherwise both mint "TCH-0003". Teacher ids
+            // are never shown to users, so unlike students there is no
+            // human-readable code to preserve alongside it.
+            String id = UUID.randomUUID().toString();
             Teacher t = new Teacher(id, name, email, phone);
+            t.updatedAt = System.currentTimeMillis();
             teachers.add(t);
             logActivity("Staff", "New teacher added — " + name);
             return t;
@@ -2177,14 +3104,172 @@ public class Main {
         public synchronized void reload() {
             load();
         }
+
+        @Override
+        public synchronized void saveSession(String token, Session session) {
+            sessionsByToken.put(token, session);
+            save();
+        }
+
+        @Override
+        public synchronized Session findSession(String token) {
+            return sessionsByToken.get(token);
+        }
+
+        @Override
+        public synchronized void deleteSession(String token) {
+            if (sessionsByToken.remove(token) != null)
+                save();
+        }
+
+        @Override
+        public synchronized List<Student> studentsChangedSince(long since) {
+            List<Student> out = new ArrayList<>();
+            for (Student s : students)
+                if (s.updatedAt > since)
+                    out.add(s);
+            return out;
+        }
+
+        @Override
+        public synchronized List<Teacher> teachersChangedSince(long since) {
+            List<Teacher> out = new ArrayList<>();
+            for (Teacher t : teachers)
+                if (t.updatedAt > since)
+                    out.add(t);
+            return out;
+        }
+
+        @Override
+        public synchronized List<MarkRow> marksChangedSince(long since) {
+            List<MarkRow> out = new ArrayList<>();
+            for (MarkRow m : getAllMarks())
+                if (m.updatedAt > since)
+                    out.add(m);
+            return out;
+        }
+
+        @Override
+        public synchronized boolean mergeStudent(Student incoming) {
+            for (int i = 0; i < students.size(); i++) {
+                Student existing = students.get(i);
+                if (!existing.id.equals(incoming.id))
+                    continue;
+                if (incoming.updatedAt <= existing.updatedAt)
+                    return false;
+                students.set(i, incoming);
+                return true;
+            }
+            students.add(incoming);
+            return true;
+        }
+
+        @Override
+        public synchronized boolean mergeTeacher(Teacher incoming) {
+            for (int i = 0; i < teachers.size(); i++) {
+                Teacher existing = teachers.get(i);
+                if (!existing.id.equals(incoming.id))
+                    continue;
+                if (incoming.updatedAt <= existing.updatedAt)
+                    return false;
+                teachers.set(i, incoming);
+                return true;
+            }
+            teachers.add(incoming);
+            return true;
+        }
+
+        @Override
+        public synchronized boolean mergeMark(MarkRow incoming) {
+            for (MarkRow existing : getAllMarks()) {
+                if (existing.academicYear.equals(incoming.academicYear)
+                        && existing.className.equals(incoming.className)
+                        && existing.subject.equals(incoming.subject)
+                        && existing.sequence.equals(incoming.sequence)
+                        && existing.studentId.equals(incoming.studentId)) {
+                    if (incoming.updatedAt <= existing.updatedAt)
+                        return false;
+                    break;
+                }
+            }
+            saveMarks(incoming.academicYear, incoming.className, incoming.subject, incoming.sequence,
+                    Map.of(incoming.studentId, incoming.score), Set.of());
+            return true;
+        }
+
+        @Override
+        public synchronized void purgeTombstones(long cutoffMillis) {
+            if (students.removeIf(s -> s.deletedAt != null && s.deletedAt < cutoffMillis))
+                save();
+        }
+
+        @Override
+        public synchronized void purgeExpiredSessions(long nowMillis) {
+            if (sessionsByToken.entrySet().removeIf(e -> e.getValue().expiresAt < nowMillis))
+                save();
+        }
+
+        @Override
+        public synchronized List<User> getUsers() {
+            return new ArrayList<>(users);
+        }
+
+        @Override
+        public synchronized List<MarkRow> getAllMarks() {
+            List<MarkRow> rows = new ArrayList<>();
+            for (Map.Entry<String, Map<String, Map<String, Map<String, Map<String, Double>>>>> year : marksByYear
+                    .entrySet())
+                for (Map.Entry<String, Map<String, Map<String, Map<String, Double>>>> cls : year.getValue().entrySet())
+                    for (Map.Entry<String, Map<String, Map<String, Double>>> subject : cls.getValue().entrySet())
+                        for (Map.Entry<String, Map<String, Double>> seq : subject.getValue().entrySet())
+                            for (Map.Entry<String, Double> score : seq.getValue().entrySet())
+                                rows.add(new MarkRow(year.getKey(), cls.getKey(), subject.getKey(), seq.getKey(),
+                                        score.getKey(), score.getValue()));
+            return rows;
+        }
+
+        @Override
+        public synchronized void restoreStudent(Student student) {
+            students.removeIf(s -> s.id.equals(student.id));
+            students.add(student);
+            for (ClassInfo c : classes)
+                if (c.name.equals(student.className)) {
+                    c.students++;
+                    return;
+                }
+            // Student references a class the backup didn't list — recreate it
+            // rather than dropping the student on the floor.
+            ClassInfo created = new ClassInfo(student.className);
+            created.students = 1;
+            classes.add(created);
+        }
+
+        @Override
+        public synchronized void restoreTeacher(Teacher teacher) {
+            teachers.removeIf(t -> t.id.equals(teacher.id));
+            teachers.add(teacher);
+        }
+
+        @Override
+        public synchronized void restoreUser(User user) {
+            // Keyed by email, matching how logins are looked up — wipeAcademicData
+            // deliberately keeps existing accounts, so a restore overwrites the
+            // matching one instead of creating a duplicate nobody can log into.
+            users.removeIf(u -> u.email != null && u.email.equalsIgnoreCase(user.email));
+            users.add(user);
+        }
     }
 
-    // Supabase (Postgres) backed storage. Used only when DATABASE_URL is
-    // set (i.e. only on Render). Every method opens its own short-lived
-    // connection — traffic here is low and the HttpServer processes one
-    // request at a time by default, so a connection pool isn't needed.
+    // Supabase (Postgres) backed storage. Used when DATABASE_URL is set —
+    // on Render, and on the desktop app in cloud mode.
+    //
+    // Connections come from a pool. Each method still borrows and returns one
+    // per call, but against a remote database actually opening one per call
+    // costs a TCP connect, a TLS handshake and an auth round trip every time,
+    // and burns through the server's connection limit under real use.
     static class PostgresDataStore implements DataStore {
         private final String url;
+        private final ConnectionPool pool;
 
         static {
             try {
@@ -2197,6 +3282,22 @@ public class Main {
 
         PostgresDataStore(String url) {
             this.url = normalizeJdbcUrl(url);
+
+            // Small by default. Supabase's free tier allows few connections,
+            // and this backend is one of several clients (the web app, the
+            // desktop app in cloud mode) sharing that budget.
+            int size = 8;
+            String configured = System.getenv("DB_POOL_SIZE");
+            if (configured != null && !configured.isBlank()) {
+                try {
+                    size = Math.max(1, Integer.parseInt(configured.trim()));
+                } catch (NumberFormatException e) {
+                    System.err.println("Ignoring invalid DB_POOL_SIZE=" + configured);
+                }
+            }
+            this.pool = new ConnectionPool(this.url, size);
+            Runtime.getRuntime().addShutdownHook(new Thread(pool::close));
+            System.out.println("Postgres connection pool ready (max " + size + ")");
         }
 
         // Render/Supabase/Heroku-style connection strings look like
@@ -2243,8 +3344,10 @@ public class Main {
             }
         }
 
+        // Returns a pooled connection. Callers close it as usual — that
+        // returns it to the pool rather than actually closing the socket.
         private Connection connect() throws SQLException {
-            return DriverManager.getConnection(url);
+            return pool.borrow();
         }
 
         @Override
@@ -2291,6 +3394,38 @@ public class Main {
                         admitted_on TEXT DEFAULT ''
                     );
                     ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT DEFAULT '';
+                    -- Human-readable student number, split out from the primary
+                    -- key so ids can become collision-free UUIDs without the
+                    -- school losing the numbering printed on its report cards.
+                    ALTER TABLE students ADD COLUMN IF NOT EXISTS code TEXT DEFAULT '';
+                    UPDATE students SET code = id WHERE code IS NULL OR code = '';
+
+                    -- Sync metadata. Every syncable row carries when it last
+                    -- changed and, if removed, when it was deleted.
+                    --
+                    -- Deletes are recorded as tombstones rather than actually
+                    -- removing the row: a device that was offline when a pupil
+                    -- was withdrawn has no way to learn about a row that simply
+                    -- vanished, so on reconnect it would helpfully "restore"
+                    -- them. The tombstone is what makes a delete survive a
+                    -- merge. Swept once they are older than any plausible
+                    -- offline stretch (see SYNC_TOMBSTONE_RETENTION_DAYS).
+                    ALTER TABLE students ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+                    ALTER TABLE students ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
+                    ALTER TABLE teachers ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+                    ALTER TABLE teachers ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
+                    ALTER TABLE marks    ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+                    ALTER TABLE classes  ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+                    CREATE INDEX IF NOT EXISTS idx_students_updated_at ON students(updated_at);
+                    CREATE INDEX IF NOT EXISTS idx_teachers_updated_at ON teachers(updated_at);
+                    CREATE INDEX IF NOT EXISTS idx_marks_updated_at ON marks(updated_at);
+                    -- Backfill: rows that predate sync are stamped once so a
+                    -- first sync sees them as existing data rather than as
+                    -- changes made at the epoch.
+                    UPDATE students SET updated_at = EXTRACT(EPOCH FROM now())*1000 WHERE updated_at = 0;
+                    UPDATE teachers SET updated_at = EXTRACT(EPOCH FROM now())*1000 WHERE updated_at = 0;
+                    UPDATE marks    SET updated_at = EXTRACT(EPOCH FROM now())*1000 WHERE updated_at = 0;
+                    UPDATE classes  SET updated_at = EXTRACT(EPOCH FROM now())*1000 WHERE updated_at = 0;
                     ALTER TABLE students ADD COLUMN IF NOT EXISTS admitted_on TEXT DEFAULT '';
                     CREATE TABLE IF NOT EXISTS marks (
                         class_name TEXT NOT NULL,
@@ -2337,6 +3472,26 @@ public class Main {
                         id INT PRIMARY KEY DEFAULT 1,
                         pinged_at TIMESTAMPTZ DEFAULT now()
                     );
+                    -- Login sessions. Persisted so a restart (Render's free
+                    -- tier spins down when idle) doesn't sign everyone out,
+                    -- and so a second instance accepts the first's tokens.
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        token TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        email TEXT,
+                        role TEXT,
+                        name TEXT,
+                        expires_at BIGINT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+                    -- Lookup paths that were doing sequential scans: every
+                    -- class roster, and every read of a class/subject/sequence
+                    -- worth of marks.
+                    CREATE INDEX IF NOT EXISTS idx_students_class_name ON students(class_name);
+                    CREATE INDEX IF NOT EXISTS idx_marks_lookup
+                        ON marks(academic_year, class_name, subject, sequence);
+                    CREATE INDEX IF NOT EXISTS idx_marks_student ON marks(student_id);
+                    CREATE INDEX IF NOT EXISTS idx_assignments_teacher ON assignments(teacher_id);
                     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
                     INSERT INTO keep_alive (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
                     -- One-time backfill: marks recorded before academic-year
@@ -2427,6 +3582,29 @@ public class Main {
             return out;
         }
 
+        /** Highest existing display code + 1. Scans the code column, not the id. */
+        private String nextPrefixedCode(Connection c, String table, String prefix) throws SQLException {
+            int max = 0;
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT code FROM " + table)) {
+                while (rs.next()) {
+                    String code = rs.getString(1);
+                    if (code == null)
+                        continue;
+                    // Historic codes came in both "SPXCC-0042" and "SPXCC0042"
+                    // shapes; accept either so numbering doesn't restart.
+                    String digits = code.replaceFirst("^" + java.util.regex.Pattern.quote(prefix), "")
+                            .replaceFirst("^" + java.util.regex.Pattern.quote(prefix.replace("-", "")), "");
+                    try {
+                        max = Math.max(max, Integer.parseInt(digits));
+                    } catch (NumberFormatException ignored) {
+                        // Not one of ours (e.g. a UUID from before codes existed).
+                    }
+                }
+            }
+            return String.format(Locale.ROOT, "%s%04d", prefix, max + 1);
+        }
+
         private String nextPrefixedId(Connection c, String table, String prefix) throws SQLException {
             int max = 0;
             try (Statement st = c.createStatement();
@@ -2450,22 +3628,26 @@ public class Main {
             try (Connection c = connect()) {
                 c.setAutoCommit(false);
                 try {
-                    String id = nextPrefixedId(c, "students", "SPXCC-");
+                    // UUID identity, sequential display code — see Student.id.
+                    String id = UUID.randomUUID().toString();
+                    String code = nextPrefixedCode(c, "students", "SPXCC-");
 
                     try (PreparedStatement ps = c.prepareStatement(
-                            "INSERT INTO students (id, name, class_name, gender, guardian, phone, dob, option_name, electives, status, photo, admitted_on) "
-                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?)")) {
+                            "INSERT INTO students (id, code, name, class_name, gender, guardian, phone, dob, option_name, electives, status, photo, admitted_on, updated_at) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)")) {
                         ps.setString(1, id);
-                        ps.setString(2, name);
-                        ps.setString(3, className);
-                        ps.setString(4, gender);
-                        ps.setString(5, guardian);
-                        ps.setString(6, phone);
-                        ps.setString(7, dob);
-                        ps.setString(8, option);
-                        ps.setString(9, electives);
-                        ps.setString(10, photo == null ? "" : photo);
-                        ps.setString(11, admittedOn == null ? "" : admittedOn);
+                        ps.setString(2, code);
+                        ps.setString(3, name);
+                        ps.setString(4, className);
+                        ps.setString(5, gender);
+                        ps.setString(6, guardian);
+                        ps.setString(7, phone);
+                        ps.setString(8, dob);
+                        ps.setString(9, option);
+                        ps.setString(10, electives);
+                        ps.setString(11, photo == null ? "" : photo);
+                        ps.setString(12, admittedOn == null ? "" : admittedOn);
+                        ps.setLong(13, System.currentTimeMillis());
                         ps.executeUpdate();
                     }
 
@@ -2510,7 +3692,8 @@ public class Main {
                 c.setAutoCommit(false);
                 try {
                     Student existing = null;
-                    try (PreparedStatement ps = c.prepareStatement("SELECT * FROM students WHERE id = ?")) {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "SELECT * FROM students WHERE id = ? AND deleted_at IS NULL")) {
                         ps.setString(1, id);
                         try (ResultSet rs = ps.executeQuery()) {
                             if (rs.next())
@@ -2537,7 +3720,7 @@ public class Main {
 
                     try (PreparedStatement ps = c.prepareStatement(
                             "UPDATE students SET name=?, class_name=?, gender=?, guardian=?, phone=?, dob=?, "
-                                    + "option_name=?, electives=?, status=?, photo=?, admitted_on=? WHERE id=?")) {
+                                    + "option_name=?, electives=?, status=?, photo=?, admitted_on=?, updated_at=? WHERE id=?")) {
                         ps.setString(1, name);
                         ps.setString(2, className);
                         ps.setString(3, gender);
@@ -2549,7 +3732,8 @@ public class Main {
                         ps.setString(9, status);
                         ps.setString(10, photo == null ? "" : photo);
                         ps.setString(11, admittedOn == null ? "" : admittedOn);
-                        ps.setString(12, id);
+                        ps.setLong(12, System.currentTimeMillis());
+                        ps.setString(13, id);
                         ps.executeUpdate();
                     }
 
@@ -2603,7 +3787,7 @@ public class Main {
                     String className = null;
                     String name = null;
                     try (PreparedStatement ps = c.prepareStatement(
-                            "SELECT name, class_name FROM students WHERE id = ?")) {
+                            "SELECT name, class_name FROM students WHERE id = ? AND deleted_at IS NULL")) {
                         ps.setString(1, id);
                         try (ResultSet rs = ps.executeQuery()) {
                             if (!rs.next()) {
@@ -2619,8 +3803,15 @@ public class Main {
                         ps.setString(1, id);
                         ps.executeUpdate();
                     }
-                    try (PreparedStatement ps = c.prepareStatement("DELETE FROM students WHERE id = ?")) {
-                        ps.setString(1, id);
+                    // Tombstone, not DELETE — see Student.deletedAt. Marks are
+                    // still removed: they are keyed by student id and a
+                    // withdrawn pupil's scores should not reappear anywhere.
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "UPDATE students SET deleted_at = ?, updated_at = ? WHERE id = ?")) {
+                        long now = System.currentTimeMillis();
+                        ps.setLong(1, now);
+                        ps.setLong(2, now);
+                        ps.setString(3, id);
                         ps.executeUpdate();
                     }
                     try (PreparedStatement dec = c.prepareStatement(
@@ -2649,6 +3840,11 @@ public class Main {
             s.status = rs.getString("status");
             String photo = rs.getString("photo");
             s.photo = photo == null ? "" : photo;
+            String code = rs.getString("code");
+            s.code = code == null || code.isBlank() ? s.id : code;
+            s.updatedAt = rs.getLong("updated_at");
+            long deleted = rs.getLong("deleted_at");
+            s.deletedAt = rs.wasNull() ? null : deleted;
             String admittedOn = rs.getString("admitted_on");
             s.admittedOn = admittedOn == null ? "" : admittedOn;
             return s;
@@ -2659,7 +3855,7 @@ public class Main {
             List<Student> out = new ArrayList<>();
             try (Connection c = connect();
                     Statement st = c.createStatement();
-                    ResultSet rs = st.executeQuery("SELECT * FROM students ORDER BY id")) {
+                    ResultSet rs = st.executeQuery("SELECT * FROM students WHERE deleted_at IS NULL ORDER BY code, id")) {
                 while (rs.next())
                     out.add(mapStudent(rs));
             } catch (SQLException e) {
@@ -2675,7 +3871,7 @@ public class Main {
             List<Student> out = new ArrayList<>();
             try (Connection c = connect();
                     PreparedStatement ps = c.prepareStatement(
-                            "SELECT * FROM students WHERE class_name = ? ORDER BY id")) {
+                            "SELECT * FROM students WHERE class_name = ? AND deleted_at IS NULL ORDER BY code, id")) {
                 ps.setString(1, className);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next())
@@ -2811,8 +4007,8 @@ public class Main {
                     }
                     if (sets != null && !sets.isEmpty()) {
                         try (PreparedStatement ps = c.prepareStatement(
-                                "INSERT INTO marks (academic_year, class_name, subject, sequence, student_id, score) VALUES (?, ?, ?, ?, ?, ?) "
-                                        + "ON CONFLICT (academic_year, class_name, subject, sequence, student_id) DO UPDATE SET score = EXCLUDED.score")) {
+                                "INSERT INTO marks (academic_year, class_name, subject, sequence, student_id, score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                                        + "ON CONFLICT (academic_year, class_name, subject, sequence, student_id) DO UPDATE SET score = EXCLUDED.score, updated_at = EXCLUDED.updated_at")) {
                             for (Map.Entry<String, Double> e : sets.entrySet()) {
                                 ps.setString(1, year);
                                 ps.setString(2, cls);
@@ -2820,6 +4016,7 @@ public class Main {
                                 ps.setString(4, sequence);
                                 ps.setString(5, e.getKey());
                                 ps.setDouble(6, e.getValue());
+                                ps.setLong(7, System.currentTimeMillis());
                                 ps.addBatch();
                             }
                             ps.executeBatch();
@@ -2884,7 +4081,8 @@ public class Main {
         @Override
         public Teacher addTeacher(String name, String email, String phone) {
             try (Connection c = connect()) {
-                String id = nextPrefixedId(c, "teachers", "TCH-");
+                // UUID — see the file store's addTeacher for why.
+                String id = UUID.randomUUID().toString();
                 try (PreparedStatement ps = c.prepareStatement(
                         "INSERT INTO teachers (id, name, email, phone) VALUES (?, ?, ?, ?)")) {
                     ps.setString(1, id);
@@ -3018,7 +4216,12 @@ public class Main {
                     }
                 }
             } catch (SQLException e) {
-                System.err.println("findUserByEmail failed: " + e.getMessage());
+                // Deliberately throws rather than returning null. Callers treat
+                // null as "this account no longer exists" and revoke the
+                // session over it, so swallowing a transient database error
+                // here used to sign the user out permanently — a dropped
+                // connection or a busy pool was enough to do it.
+                throw new RuntimeException("findUserByEmail failed: " + e.getMessage(), e);
             }
             return null;
         }
@@ -3263,8 +4466,8 @@ public class Main {
 
         @Override
         public File getBackupFile() {
-            // Not file-based — data already lives safely in the managed
-            // Postgres database, so there's nothing local to download here.
+            // Not file-based — there is no local file to stream. Backups here
+            // go through Backup.export() instead, which works for both stores.
             return null;
         }
 
@@ -3272,6 +4475,392 @@ public class Main {
         public void reload() {
             // No-op: every method above reads live from the database, so
             // there's no in-memory snapshot that needs refreshing.
+        }
+
+        @Override
+        public void saveSession(String token, Session session) {
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO sessions (token, user_id, email, role, name, expires_at) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?) "
+                                    + "ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at")) {
+                ps.setString(1, token);
+                ps.setString(2, session.userId);
+                ps.setString(3, session.email);
+                ps.setString(4, session.role);
+                ps.setString(5, session.name);
+                ps.setLong(6, session.expiresAt);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new RuntimeException("saveSession failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public Session findSession(String token) {
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT user_id, email, role, name, expires_at FROM sessions WHERE token = ?")) {
+                ps.setString(1, token);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next())
+                        return null;
+                    return new Session(rs.getString("user_id"), rs.getString("email"), rs.getString("role"),
+                            rs.getString("name"), rs.getLong("expires_at"));
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("findSession failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void deleteSession(String token) {
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement("DELETE FROM sessions WHERE token = ?")) {
+                ps.setString(1, token);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new RuntimeException("deleteSession failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public List<Student> studentsChangedSince(long since) {
+            List<Student> out = new ArrayList<>();
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT * FROM students WHERE updated_at > ? ORDER BY updated_at")) {
+                ps.setLong(1, since);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next())
+                        out.add(mapStudent(rs));
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("studentsChangedSince failed: " + e.getMessage(), e);
+            }
+            return out;
+        }
+
+        @Override
+        public List<Teacher> teachersChangedSince(long since) {
+            List<Teacher> out = new ArrayList<>();
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT id, name, email, phone, updated_at FROM teachers WHERE updated_at > ?")) {
+                ps.setLong(1, since);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        Teacher t = new Teacher(rs.getString("id"), rs.getString("name"),
+                                rs.getString("email"), rs.getString("phone"));
+                        t.updatedAt = rs.getLong("updated_at");
+                        out.add(t);
+                    }
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("teachersChangedSince failed: " + e.getMessage(), e);
+            }
+            return out;
+        }
+
+        @Override
+        public List<MarkRow> marksChangedSince(long since) {
+            List<MarkRow> out = new ArrayList<>();
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT academic_year, class_name, subject, sequence, student_id, score, updated_at "
+                                    + "FROM marks WHERE updated_at > ? ORDER BY updated_at")) {
+                ps.setLong(1, since);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        MarkRow row = new MarkRow(rs.getString("academic_year"), rs.getString("class_name"),
+                                rs.getString("subject"), rs.getString("sequence"), rs.getString("student_id"),
+                                rs.getDouble("score"));
+                        row.updatedAt = rs.getLong("updated_at");
+                        out.add(row);
+                    }
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("marksChangedSince failed: " + e.getMessage(), e);
+            }
+            return out;
+        }
+
+        @Override
+        public boolean mergeStudent(Student incoming) {
+            try (Connection c = connect()) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT updated_at FROM students WHERE id = ?")) {
+                    ps.setString(1, incoming.id);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next() && incoming.updatedAt <= rs.getLong("updated_at"))
+                            return false;
+                    }
+                }
+                try (PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO students (id, code, name, class_name, gender, guardian, phone, dob, "
+                                + "option_name, electives, status, photo, admitted_on, updated_at, deleted_at) "
+                                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                                + "ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, name=EXCLUDED.name, "
+                                + "class_name=EXCLUDED.class_name, gender=EXCLUDED.gender, guardian=EXCLUDED.guardian, "
+                                + "phone=EXCLUDED.phone, dob=EXCLUDED.dob, option_name=EXCLUDED.option_name, "
+                                + "electives=EXCLUDED.electives, status=EXCLUDED.status, photo=EXCLUDED.photo, "
+                                + "admitted_on=EXCLUDED.admitted_on, updated_at=EXCLUDED.updated_at, "
+                                + "deleted_at=EXCLUDED.deleted_at")) {
+                    ps.setString(1, incoming.id);
+                    ps.setString(2, incoming.displayCode());
+                    ps.setString(3, incoming.name);
+                    ps.setString(4, incoming.className);
+                    ps.setString(5, incoming.gender);
+                    ps.setString(6, incoming.guardian);
+                    ps.setString(7, incoming.phone);
+                    ps.setString(8, incoming.dob);
+                    ps.setString(9, incoming.option);
+                    ps.setString(10, incoming.electives);
+                    ps.setString(11, incoming.status == null ? "Active" : incoming.status);
+                    ps.setString(12, incoming.photo == null ? "" : incoming.photo);
+                    ps.setString(13, incoming.admittedOn == null ? "" : incoming.admittedOn);
+                    ps.setLong(14, incoming.updatedAt);
+                    if (incoming.deletedAt == null)
+                        ps.setNull(15, java.sql.Types.BIGINT);
+                    else
+                        ps.setLong(15, incoming.deletedAt);
+                    ps.executeUpdate();
+                }
+                return true;
+            } catch (SQLException e) {
+                throw new RuntimeException("mergeStudent failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public boolean mergeTeacher(Teacher incoming) {
+            try (Connection c = connect()) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT updated_at FROM teachers WHERE id = ?")) {
+                    ps.setString(1, incoming.id);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next() && incoming.updatedAt <= rs.getLong("updated_at"))
+                            return false;
+                    }
+                }
+                try (PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO teachers (id, name, email, phone, updated_at) VALUES (?,?,?,?,?) "
+                                + "ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email, "
+                                + "phone=EXCLUDED.phone, updated_at=EXCLUDED.updated_at")) {
+                    ps.setString(1, incoming.id);
+                    ps.setString(2, incoming.name);
+                    ps.setString(3, incoming.email);
+                    ps.setString(4, incoming.phone);
+                    ps.setLong(5, incoming.updatedAt);
+                    ps.executeUpdate();
+                }
+                return true;
+            } catch (SQLException e) {
+                throw new RuntimeException("mergeTeacher failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public boolean mergeMark(MarkRow incoming) {
+            try (Connection c = connect()) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT updated_at FROM marks WHERE academic_year=? AND class_name=? AND subject=? "
+                                + "AND sequence=? AND student_id=?")) {
+                    ps.setString(1, incoming.academicYear);
+                    ps.setString(2, incoming.className);
+                    ps.setString(3, incoming.subject);
+                    ps.setString(4, incoming.sequence);
+                    ps.setString(5, incoming.studentId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next() && incoming.updatedAt <= rs.getLong("updated_at"))
+                            return false;
+                    }
+                }
+                try (PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO marks (academic_year, class_name, subject, sequence, student_id, score, updated_at) "
+                                + "VALUES (?,?,?,?,?,?,?) ON CONFLICT (academic_year, class_name, subject, sequence, student_id) "
+                                + "DO UPDATE SET score=EXCLUDED.score, updated_at=EXCLUDED.updated_at")) {
+                    ps.setString(1, incoming.academicYear);
+                    ps.setString(2, incoming.className);
+                    ps.setString(3, incoming.subject);
+                    ps.setString(4, incoming.sequence);
+                    ps.setString(5, incoming.studentId);
+                    ps.setDouble(6, incoming.score);
+                    ps.setLong(7, incoming.updatedAt);
+                    ps.executeUpdate();
+                }
+                return true;
+            } catch (SQLException e) {
+                throw new RuntimeException("mergeMark failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void purgeTombstones(long cutoffMillis) {
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "DELETE FROM students WHERE deleted_at IS NOT NULL AND deleted_at < ?")) {
+                ps.setLong(1, cutoffMillis);
+                int removed = ps.executeUpdate();
+                if (removed > 0)
+                    System.out.println("Swept " + removed + " tombstoned student record(s).");
+            } catch (SQLException e) {
+                throw new RuntimeException("purgeTombstones failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void purgeExpiredSessions(long nowMillis) {
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement("DELETE FROM sessions WHERE expires_at < ?")) {
+                ps.setLong(1, nowMillis);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new RuntimeException("purgeExpiredSessions failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public List<User> getUsers() {
+            List<User> out = new ArrayList<>();
+            try (Connection c = connect();
+                    Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT id, name, email, password, role FROM users ORDER BY id")) {
+                while (rs.next())
+                    out.add(new User(rs.getString("id"), rs.getString("name"), rs.getString("email"),
+                            rs.getString("password"), rs.getString("role")));
+            } catch (SQLException e) {
+                throw new RuntimeException("getUsers failed: " + e.getMessage(), e);
+            }
+            return out;
+        }
+
+        @Override
+        public List<MarkRow> getAllMarks() {
+            List<MarkRow> out = new ArrayList<>();
+            try (Connection c = connect();
+                    Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery(
+                            "SELECT academic_year, class_name, subject, sequence, student_id, score, updated_at FROM marks")) {
+                while (rs.next()) {
+                    MarkRow row = new MarkRow(rs.getString("academic_year"), rs.getString("class_name"),
+                            rs.getString("subject"), rs.getString("sequence"), rs.getString("student_id"),
+                            rs.getDouble("score"));
+                    row.updatedAt = rs.getLong("updated_at");
+                    out.add(row);
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("getAllMarks failed: " + e.getMessage(), e);
+            }
+            return out;
+        }
+
+        @Override
+        public void restoreStudent(Student s) {
+            try (Connection c = connect()) {
+                c.setAutoCommit(false);
+                try {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO students (id, code, name, class_name, gender, guardian, phone, dob, option_name, electives, status, photo, admitted_on) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                                    + "ON CONFLICT (id) DO UPDATE SET code = EXCLUDED.code, name = EXCLUDED.name, class_name = EXCLUDED.class_name, "
+                                    + "gender = EXCLUDED.gender, guardian = EXCLUDED.guardian, phone = EXCLUDED.phone, "
+                                    + "dob = EXCLUDED.dob, option_name = EXCLUDED.option_name, electives = EXCLUDED.electives, "
+                                    + "status = EXCLUDED.status, photo = EXCLUDED.photo, admitted_on = EXCLUDED.admitted_on")) {
+                        ps.setString(1, s.id);
+                        ps.setString(2, s.displayCode());
+                        ps.setString(3, s.name);
+                        ps.setString(4, s.className);
+                        ps.setString(5, s.gender);
+                        ps.setString(6, s.guardian);
+                        ps.setString(7, s.phone);
+                        ps.setString(8, s.dob);
+                        ps.setString(9, s.option);
+                        ps.setString(10, s.electives);
+                        ps.setString(11, s.status == null || s.status.isBlank() ? "Active" : s.status);
+                        ps.setString(12, s.photo == null ? "" : s.photo);
+                        ps.setString(13, s.admittedOn == null ? "" : s.admittedOn);
+                        ps.executeUpdate();
+                    }
+                    // Keep the denormalised per-class count in step, recreating
+                    // the class if the backup referenced one it didn't list.
+                    try (PreparedStatement ins = c.prepareStatement(
+                            "INSERT INTO classes (name, students) VALUES (?, 1) "
+                                    + "ON CONFLICT (name) DO UPDATE SET students = classes.students + 1")) {
+                        ins.setString(1, s.className);
+                        ins.executeUpdate();
+                    }
+                    c.commit();
+                } catch (SQLException e) {
+                    c.rollback();
+                    throw e;
+                } finally {
+                    c.setAutoCommit(true);
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("restoreStudent failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void restoreTeacher(Teacher t) {
+            try (Connection c = connect()) {
+                c.setAutoCommit(false);
+                try {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO teachers (id, name, email, phone) VALUES (?, ?, ?, ?) "
+                                    + "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, "
+                                    + "email = EXCLUDED.email, phone = EXCLUDED.phone")) {
+                        ps.setString(1, t.id);
+                        ps.setString(2, t.name);
+                        ps.setString(3, t.email);
+                        ps.setString(4, t.phone);
+                        ps.executeUpdate();
+                    }
+                    if (t.assignments != null && !t.assignments.isEmpty()) {
+                        try (PreparedStatement ps = c.prepareStatement(
+                                "INSERT INTO assignments (teacher_id, class_name, subject) VALUES (?, ?, ?) "
+                                        + "ON CONFLICT DO NOTHING")) {
+                            for (Assignment a : t.assignments) {
+                                ps.setString(1, t.id);
+                                ps.setString(2, a.className);
+                                ps.setString(3, a.subject);
+                                ps.addBatch();
+                            }
+                            ps.executeBatch();
+                        }
+                    }
+                    c.commit();
+                } catch (SQLException e) {
+                    c.rollback();
+                    throw e;
+                } finally {
+                    c.setAutoCommit(true);
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("restoreTeacher failed: " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void restoreUser(User u) {
+            // Keyed by email to match how logins resolve. The stored ID may
+            // differ from the backup's if that email already has an account —
+            // harmless, since nothing else references users by ID.
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO users (id, name, email, password, role) VALUES (?, ?, ?, ?, ?) "
+                                    + "ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, "
+                                    + "password = EXCLUDED.password, role = EXCLUDED.role")) {
+                ps.setString(1, u.id == null || u.id.isBlank() ? "USR-" + UUID.randomUUID() : u.id);
+                ps.setString(2, u.name);
+                ps.setString(3, u.email);
+                ps.setString(4, u.password);
+                ps.setString(5, u.role);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new RuntimeException("restoreUser failed: " + e.getMessage(), e);
+            }
         }
     }
 }

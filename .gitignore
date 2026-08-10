@@ -42,3 +42,8 @@ backend/src/main/java/public/
 *.ser.bak
 .env
 .env.local
+# License signing keys — the private key must never be committed
+license-keys/
+
+# Downloaded JDBC driver
+backend/lib/

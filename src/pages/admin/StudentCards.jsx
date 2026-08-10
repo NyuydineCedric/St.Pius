@@ -1,3 +1,4 @@
+import AuthImage from "../../components/AuthImage";
 import { useEffect, useMemo, useState } from "react";
 import { Search, ChevronRight, User, GraduationCap, CalendarDays } from "lucide-react";
 import {
@@ -31,21 +32,18 @@ function StudentCardTile({ student, onOpen }) {
     >
       <div className="flex items-start gap-3 border-b border-[#e2e8f0] bg-[#f8fafc] p-4">
         <div className="flex h-16 w-14 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[#e2e8f0] bg-white">
-          {student.photo ? (
-            <img
-              src={student.photo}
-              alt={`${student.name} — photo`}
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <User size={22} className="text-slate-300" />
-          )}
+          <AuthImage
+            src={student.photo}
+            alt={`${student.name} — photo`}
+            className="h-full w-full object-cover"
+            fallback={<User size={22} className="text-slate-300" />}
+          />
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-[#1e3a8a]">
             {student.name}
           </p>
-          <p className="font-mono text-xs text-slate-400">{student.id}</p>
+          <p className="font-mono text-xs text-slate-400">{student.code || student.id}</p>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Badge tone="navy">{student.class}</Badge>
             {student.option && <Badge tone="sky">{student.option}</Badge>}
@@ -128,7 +126,7 @@ export default function StudentCards() {
     const q = search.trim().toLowerCase();
     if (!q) return roster;
     return roster.filter((s) =>
-      `${s.name} ${s.id}`.toLowerCase().includes(q),
+      `${s.name} ${s.code || s.id}`.toLowerCase().includes(q),
     );
   }, [roster, search]);
 
@@ -226,7 +224,7 @@ export default function StudentCards() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {filteredRoster.map((student) => (
                 <StudentCardTile
-                  key={student.id}
+                  key={student.code || student.id}
                   student={student}
                   onOpen={setHistoryStudent}
                 />

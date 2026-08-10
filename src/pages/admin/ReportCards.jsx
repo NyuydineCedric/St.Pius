@@ -1,3 +1,4 @@
+import AuthImage from "../../components/AuthImage";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Search, FileDown, Printer, ChevronRight, Layers } from "lucide-react";
@@ -150,17 +151,16 @@ export function ReportCardBody({
         {/* Student passport photo — flush right on the same row as the
             school logo/identity block. */}
         <div className="ml-auto flex-shrink-0">
-          {student.photo ? (
-            <img
-              src={student.photo}
-              alt={`${student.name} — photo`}
-              className="h-40 w-40 border border-black object-cover print:h-34 print:w-30"
-            />
-          ) : (
-            <div className="flex h-42 w-28 items-center justify-center border border-black text-[10px] uppercase text-slate-400 print:h-24 print:w-20 print:text-[8px]">
-              Photo
-            </div>
-          )}
+          <AuthImage
+            src={student.photo}
+            alt={`${student.name} — photo`}
+            className="h-40 w-40 border border-black object-cover print:h-34 print:w-30"
+            fallback={
+              <div className="flex h-42 w-28 items-center justify-center border border-black text-[10px] uppercase text-slate-400 print:h-24 print:w-20 print:text-[8px]">
+                Photo
+              </div>
+            }
+          />
         </div>
       </div>
 
@@ -223,7 +223,7 @@ export function ReportCardBody({
               {classNumber ?? "—"}
             </td>
             <td className="border border-black px-3 py-1.5 text-[16px] font-bold uppercase print:text-[12px]">
-              {student.id}
+              {student.code || student.id}
             </td>
           </tr>
         </tbody>
@@ -748,7 +748,7 @@ export default function ReportCards() {
             : true,
         )
         .filter((student) =>
-          `${student.name} ${student.id}`
+          `${student.name} ${student.code || student.id}`
             .toLowerCase()
             .includes(search.toLowerCase()),
         ),
@@ -1100,7 +1100,7 @@ export default function ReportCards() {
               <div className="max-h-[880px] space-y-2 overflow-y-auto pr-1">
                 {filteredStudents.map((student) => (
                   <button
-                    key={student.id}
+                    key={student.code || student.id}
                     onClick={() => setSelectedStudent(student)}
                     className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition ${
                       selectedStudent?.id === student.id
@@ -1111,7 +1111,7 @@ export default function ReportCards() {
                     <div>
                       <div className="font-medium">{student.name}</div>
                       <div className="text-xs text-slate-400">
-                        {student.id}
+                        {student.code || student.id}
                         {student.option ? ` · ${student.option}` : ""}
                       </div>
                     </div>

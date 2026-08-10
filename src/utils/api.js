@@ -23,7 +23,7 @@ function clearClientSession() {
   }
 }
 
-function authHeaders(extra = {}) {
+export function authHeaders(extra = {}) {
   const headers = { ...extra };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -137,8 +137,19 @@ export async function putJson(path, data) {
   return await res.json();
 }
 
-export function getStudents() {
-  return getJson("/api/students");
+// Returns every student WITHOUT their photo — each one is a ~40–80KB base64
+// data URL, so a whole school's worth turns this into a multi-megabyte
+// response, and this list is loaded on every page. Each student carries a
+// `hasPhoto` boolean instead.
+//
+// Pass { includePhotos: true } only where the photos are really needed. In
+// particular the student editor must, because it saves the form back and
+// would otherwise write an empty photo over the stored one.
+//
+// Screens that display photos (student cards, report cards, history) should
+// prefer getRoster(className), which is naturally limited to one class.
+export function getStudents({ includePhotos = false } = {}) {
+  return getJson(`/api/students${includePhotos ? "?includePhotos=1" : ""}`);
 }
 
 export function addStudent(student) {
@@ -229,6 +240,36 @@ export function saveSettings(partial) {
   return postJson("/api/settings", partial);
 }
 
+// Changes the signed-in user's own password. Not licence-gated — securing
+// your account must work regardless of billing state.
+export function changePassword(currentPassword, newPassword) {
+  return postJson("/api/account/password", { currentPassword, newPassword });
+}
+
+// Desktop sync status: { configured, server, syncing, lastSyncedAt, pending,
+// lastError }. `configured:false` on a standalone or cloud-hosted install.
+export function getSyncStatus() {
+  return getJson("/api/sync/status");
+}
+
+// Runs a sync immediately rather than waiting for the background timer.
+export function syncNow() {
+  return postJson("/api/sync/now", {});
+}
+
+// Current licence state: { status, school, expires, daysRemaining, readOnly,
+// message }. When readOnly is true the backend refuses writes with HTTP 402,
+// so the UI should say so up front rather than letting people fill in a form
+// that cannot be saved.
+export function getLicense() {
+  return getJson("/api/license");
+}
+
+// Installs a licence key. Admin only. Takes effect immediately — no restart.
+export function activateLicense(key) {
+  return postJson("/api/license/activate", { key });
+}
+
 export function assignClassMaster(className, teacherId) {
   return postJson("/api/classes/master", { class: className, teacherId });
 }
@@ -243,7 +284,7 @@ export async function downloadBackup() {
   }
   const disposition = res.headers.get("Content-Disposition") || "";
   const match = disposition.match(/filename="?([^"]+)"?/);
-  const filename = match ? match[1] : `report-card-backup-${Date.now()}.ser`;
+  const filename = match ? match[1] : `report-card-backup-${Date.now()}.json`;
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

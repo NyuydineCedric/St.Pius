@@ -96,7 +96,7 @@ export default function MarksEntry() {
 
   const searchableRoster = studentSearch.trim()
     ? filteredRoster.filter((s) =>
-        `${s.name} ${s.id}`
+        `${s.name} ${s.code || s.id}`
           .toLowerCase()
           .includes(studentSearch.trim().toLowerCase()),
       )
@@ -226,7 +226,7 @@ export default function MarksEntry() {
               <option value="">-- Select a student --</option>
               {searchableRoster.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.name} ({s.id}){s.option ? ` — ${s.option}` : ""}
+                  {s.name} ({s.code || s.id}){s.option ? ` — ${s.option}` : ""}
                 </option>
               ))}
             </Select>

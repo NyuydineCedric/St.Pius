@@ -105,6 +105,19 @@ For a separate SPA host, set `VITE_API_BASE_URL` at frontend build time and `ALL
 | `DATA_DIR` | `.` | Directory for `backend-data.ser` (+ `.bak`) |
 | `ALLOWED_ORIGIN` | localhost origins only | CORS allowlist for cross-origin web |
 | `VITE_API_BASE_URL` | `http://localhost:8080` (prod build) | Frontend API base when not same-origin |
+| `BOOTSTRAP_ADMIN_EMAIL` | unset | First-boot admin email. Applied **only** if no admin exists |
+| `BOOTSTRAP_ADMIN_PASSWORD` | unset | First-boot admin password (required alongside the email) |
+| `BOOTSTRAP_ADMIN_NAME` | `Admin` | Display name for the bootstrap admin |
+| `DB_POOL_SIZE` | `8` | Max pooled Postgres connections. Keep low on Supabase free tier |
+| `HTTP_THREADS` | `16` | Concurrent request handlers |
+| `LICENSE_KEY` | unset | Licence key. Falls back to `license.key` in the data dir |
+| `LICENSE_SERVER_URL` | unset | Optional revocation check. Unset = offline verification only |
+| `ALLOW_DEMO_SEED` | unset | Enables `/api/demo/seed`, which **erases all academic data** |
+
+> Leave the `BOOTSTRAP_ADMIN_*` vars unset for a school deployment — the first
+> account registered through the UI becomes the admin. They exist for automated
+> and demo deploys, are ignored once an admin account exists, and never
+> overwrite an existing password.
 
 ---
 
@@ -119,6 +132,94 @@ For a separate SPA host, set `VITE_API_BASE_URL` at frontend build time and `ALL
 Public: `/api/health`, `/api/auth/status`, `/api/login`, `/api/register`.
 
 ---
+
+## Licensing
+
+Licences are **Ed25519-signed tokens**, so a school's copy verifies without
+reaching any server — their term's report cards must not depend on the internet
+being up.
+
+### Managing licences (you, not the school)
+
+```bash
+node scripts/license.mjs keygen                                  # once, ever
+node scripts/license.mjs issue --school "St. Pius College" --days 365
+node scripts/license.mjs list            # every licence issued, state, expiry
+node scripts/license.mjs show <LIC-ID>   # re-print a key you already issued
+node scripts/license.mjs revoke <LIC-ID> # mark revoked (see caveat below)
+node scripts/license.mjs inspect <key>   # decode any key
+```
+
+Everything lives in `license-keys/` (gitignored):
+
+| File | What it is |
+| ---- | ---------- |
+| `license-private.pem` | Signing key. **Back this up.** Lose it and you can never issue another licence that existing installs accept |
+| `license-public.pem` | Public half, compiled into `License.java` |
+| `issued.json` | Ledger of every licence handed out — who, when, expiry, revoked |
+
+The ledger is bookkeeping only; licences are self-contained and verify without
+it. It exists so you can answer "who has what, and when does it lapse?".
+
+`list` flags anything expiring within 30 days — worth running before each term.
+
+**Revocation is not live yet.** Because licences verify offline by signature,
+`revoke` only marks the ledger. It takes effect once something serves that
+ledger at `/api/license/status` and the school's install sets
+`LICENSE_SERVER_URL`. Until then a key works until its expiry date, so keep
+pilot licences short rather than relying on being able to pull one back.
+
+A school installs the key by pasting it into Settings (`POST /api/license/activate`),
+or via `LICENSE_KEY` / a `license.key` file in the data directory. Activation
+takes effect immediately, no restart.
+
+**Unlicensed and expired installs go read-only, not dark.** Reads, report-card
+printing and `GET /api/backup` all keep working; only writes return `402`. A
+school that lapses mid-term can still get at — and export — its own records.
+Withholding a school's data is never the lever.
+
+If `LICENSE_SERVER_URL` is set, licences are also checked for revocation. That
+check fails *open*: an unreachable server leaves the licence alone, since "we
+couldn't ask" must not mean "denied".
+
+## Offline-first sync (desktop)
+
+The desktop app always reads and writes **its own local file**, so a school
+whose internet is out keeps working normally. When a connection is available it
+syncs that data with the shared server.
+
+Configure it in `cloud-config.json` (the app writes one next to its data and
+tells you where):
+
+```json
+{
+  "syncServerUrl": "https://your-backend.onrender.com",
+  "syncEmail": "admin@yourschool.cm",
+  "syncPassword": "…"
+}
+```
+
+Equivalent env vars for a non-Electron run: `SYNC_SERVER_URL`, `SYNC_EMAIL`,
+`SYNC_PASSWORD`.
+
+- Syncs every 5 minutes, plus **Settings → Sync → Sync Now**
+- Settings shows last-synced time and how many changes are waiting
+- Being offline is not an error — changes queue and go up later
+
+**Conflicts** resolve last-write-wins per record, and marks merge per
+`(year, class, subject, sequence, student)` cell, so two teachers entering
+different subjects never collide. Client timestamps are honoured for ordering
+but clamped to the server's clock: a PC with a fast clock would otherwise stamp
+changes into the future and re-sync them forever.
+
+**Deletes travel as tombstones** (`deleted_at`) kept for 180 days. A row that
+simply vanished would be re-created by any device that was offline when it
+happened.
+
+> The older `databaseUrl` setting, which pointed the desktop straight at
+> Postgres, is superseded. It stops working entirely without internet and puts
+> database credentials on the school's PC. Sync mode replaces it; if both are
+> set, sync wins.
 
 ## Project layout
 
@@ -155,6 +256,12 @@ shipping-readiness.md  Gate checklist
 - Do not deploy publicly without `ALLOWED_ORIGIN` and TLS at the reverse proxy.
 - See `shipping-readiness.md` for the remaining packaging / ops checklist.
 
-## Demo credentials 
+## Demo credentials
+
+Created **only** by `npm run seed:demo` (or a `BOOTSTRAP_ADMIN_*` bootstrap on an
+empty store) — never seeded automatically into a real deployment.
+
  Admin    stpius@gmail.com  /  stpius123@
  Teacher  teacher@gbhs-demo.cm  /  DemoTeacher123!
+
+**Do not ship a build to a school with these accounts present.**

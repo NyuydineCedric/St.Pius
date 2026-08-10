@@ -77,7 +77,11 @@ function ensureCloudConfig() {
     if (!fs.existsSync(CLOUD_CONFIG_PATH)) {
       fs.writeFileSync(
         CLOUD_CONFIG_PATH,
-        JSON.stringify({ databaseUrl: "" }, null, 2),
+        JSON.stringify(
+          { syncServerUrl: "", syncEmail: "", syncPassword: "", databaseUrl: "" },
+          null,
+          2,
+        ),
         "utf8",
       );
     }
@@ -88,18 +92,27 @@ function ensureCloudConfig() {
           "Cloud Sync — Report Card Management System",
           "===========================================",
           "",
-          "By default this app stores all data in a local file on this PC.",
+          "This app always stores its data on this PC, so it keeps working",
+          "when the internet is down. To also share that data with the",
+          "teachers' online system, fill in cloud-config.json in this folder:",
           "",
-          "To make it receive marks that teachers enter online (from home,",
-          "phone, anywhere), paste your Postgres connection string into",
-          "cloud-config.json in this same folder, e.g.:",
+          "  {",
+          '    "syncServerUrl": "https://your-backend.onrender.com",',
+          '    "syncEmail": "admin@yourschool.cm",',
+          '    "syncPassword": "your admin password"',
+          "  }",
           "",
-          '  { "databaseUrl": "postgresql://user:pass@host:5432/dbname" }',
+          "Then fully close and reopen the app. Whenever this PC is online it",
+          "sends up what you have entered and pulls down what the teachers",
+          "have entered. When it is offline you carry on as normal and it",
+          "catches up later — Settings shows what is waiting to be sent.",
           "",
-          "Then fully close and reopen this app. Whenever this PC has an",
-          "internet connection, it will read and write the same shared",
-          "database that the teachers' online dashboards use. Leave",
-          '"databaseUrl" as an empty string to go back to local-only mode.',
+          "Leave syncServerUrl empty for a standalone, local-only install.",
+          "",
+          "NOTE: an older setting, \"databaseUrl\", made this PC talk straight",
+          "to the database instead. That is no longer recommended: it stops",
+          "working entirely without internet, and it puts the database",
+          "password on this computer. Use the sync settings above.",
         ].join("\n"),
         "utf8",
       );
@@ -109,14 +122,23 @@ function ensureCloudConfig() {
   }
 }
 
-function readCloudDatabaseUrl() {
+function readCloudConfig() {
   try {
-    const raw = fs.readFileSync(CLOUD_CONFIG_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed.databaseUrl === "string" ? parsed.databaseUrl.trim() : "";
+    const parsed = JSON.parse(fs.readFileSync(CLOUD_CONFIG_PATH, "utf8"));
+    const str = (v) => (typeof v === "string" ? v.trim() : "");
+    return {
+      syncServerUrl: str(parsed.syncServerUrl),
+      syncEmail: str(parsed.syncEmail),
+      syncPassword: str(parsed.syncPassword),
+      databaseUrl: str(parsed.databaseUrl),
+    };
   } catch {
-    return "";
+    return { syncServerUrl: "", syncEmail: "", syncPassword: "", databaseUrl: "" };
   }
+}
+
+function readCloudDatabaseUrl() {
+  return readCloudConfig().databaseUrl;
 }
 
 // Locates the bundled Postgres JDBC driver (only needed when cloud-config's
@@ -134,15 +156,31 @@ function resolvePostgresJar() {
 
 function startJavaBackend() {
   const javaBin = resolveJavaBinary();
-  const databaseUrl = readCloudDatabaseUrl();
+  const cloud = readCloudConfig();
+  const databaseUrl = cloud.databaseUrl;
+  const syncConfigured = Boolean(cloud.syncServerUrl && cloud.syncEmail && cloud.syncPassword);
 
   console.log("DEBUG USER_DATA_DIR:", USER_DATA_DIR);
   console.log("DEBUG PUBLIC_DIR:", PUBLIC_DIR);
   console.log("DEBUG BACKEND_DIR:", BACKEND_DIR);
   console.log("DEBUG javaBin:", javaBin);
-  console.log("DEBUG cloud sync:", databaseUrl ? "ENABLED" : "disabled (local file storage)");
+  console.log(
+    "DEBUG mode:",
+    syncConfigured
+      ? "local storage + sync to " + cloud.syncServerUrl
+      : databaseUrl
+        ? "direct database (legacy — no offline support)"
+        : "local storage only",
+  );
+  if (syncConfigured && databaseUrl) {
+    console.warn(
+      "[electron] cloud-config.json has BOTH syncServerUrl and the legacy databaseUrl. Using sync and ignoring databaseUrl — talking straight to the database would give up offline support.",
+    );
+  }
 
-  const pgJar = databaseUrl ? resolvePostgresJar() : null;
+  // Sync mode keeps this PC on its own local file store, so the Postgres
+  // driver is only needed for the legacy direct-database mode.
+  const pgJar = !syncConfigured && databaseUrl ? resolvePostgresJar() : null;
   if (databaseUrl && !pgJar) {
     console.warn(
       "[electron] cloud-config.json has a databaseUrl set, but the bundled Postgres driver was not found — falling back to local file storage.",
@@ -159,7 +197,15 @@ function startJavaBackend() {
   // *this PC* reads/writes the shared database as a client, not that other
   // devices on the network can reach this PC's copy of the app.
   const spawnEnv = { ...process.env, BIND_HOST: "127.0.0.1" };
-  if (pgJar) {
+  if (syncConfigured) {
+    // Local file store stays the source of truth; the backend syncs it up
+    // and down in the background. This is what lets the app keep working
+    // through an outage instead of stopping dead.
+    spawnEnv.SYNC_SERVER_URL = cloud.syncServerUrl;
+    spawnEnv.SYNC_EMAIL = cloud.syncEmail;
+    spawnEnv.SYNC_PASSWORD = cloud.syncPassword;
+    delete spawnEnv.DATABASE_URL;
+  } else if (pgJar) {
     spawnEnv.DATABASE_URL = databaseUrl;
   }
 

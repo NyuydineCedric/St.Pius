@@ -17,6 +17,8 @@ import {
   Database,
   Cloud,
   CloudOff,
+  KeyRound,
+  RefreshCw,
 } from "lucide-react";
 import {
   Card,
@@ -41,6 +43,11 @@ import {
   downloadBackup,
   restoreBackup,
   getHealth,
+  getLicense,
+  activateLicense,
+  changePassword,
+  getSyncStatus,
+  syncNow,
 } from "../../utils/api";
 import { ALL_SUBJECTS, compareClassNames } from "../../utils/subjects";
 import { catLabel } from "../../utils/grading";
@@ -112,6 +119,88 @@ export default function Settings() {
       .then((h) => setStorageMode(h.storage || "file"))
       .catch(() => setStorageMode(null));
   }, []);
+
+  // Password change
+  const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState("");
+
+  async function handleChangePassword() {
+    setPwError("");
+    if (pw.next !== pw.confirm) {
+      setPwError("The two new passwords don't match.");
+      return;
+    }
+    if (pw.next.length < 8) {
+      setPwError("New password must be at least 8 characters.");
+      return;
+    }
+    setPwBusy(true);
+    try {
+      await changePassword(pw.current, pw.next);
+      setPw({ current: "", next: "", confirm: "" });
+      flashSaved("Password changed.");
+    } catch (err) {
+      setPwError(err.message || "Could not change password");
+    } finally {
+      setPwBusy(false);
+    }
+  }
+
+  // Desktop sync
+  const [sync, setSync] = useState(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+
+  useEffect(() => {
+    getSyncStatus()
+      .then(setSync)
+      .catch(() => setSync(null));
+  }, []);
+
+  async function handleSyncNow() {
+    setSyncBusy(true);
+    try {
+      setSync(await syncNow());
+      flashSaved("Sync complete.");
+    } catch (err) {
+      // The endpoint returns the status even on failure, so show why.
+      setSync((prev) => ({ ...(prev || {}), lastError: err.message }));
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  // Licence
+  const [license, setLicense] = useState(null);
+  const [licenseKey, setLicenseKey] = useState("");
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseError, setLicenseError] = useState("");
+
+  useEffect(() => {
+    getLicense()
+      .then(setLicense)
+      .catch(() => setLicense(null));
+  }, []);
+
+  async function handleActivateLicense() {
+    const key = licenseKey.trim();
+    if (!key) return;
+    setLicenseBusy(true);
+    setLicenseError("");
+    try {
+      const updated = await activateLicense(key);
+      setLicense(updated);
+      setLicenseKey("");
+      flashSaved("Licence activated.");
+      // The read-only banner lives in the layout above this page, so reload
+      // to clear it rather than leaving a stale warning on screen.
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+      setLicenseError(err.message || "Could not activate that licence key");
+    } finally {
+      setLicenseBusy(false);
+    }
+  }
 
   // Data backup / restore
   const [backupBusy, setBackupBusy] = useState(false);
@@ -760,6 +849,178 @@ export default function Settings() {
         </div>
       </Card>
 
+      {/* Sync — only meaningful on a desktop install that has a server */}
+      {sync?.configured && (
+        <Card className="mt-6">
+          <CardHeader
+            title="Sync"
+            subtitle="Shares this computer's data with the school's online system"
+            action={<RefreshCw size={18} className="text-slate-300" />}
+          />
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+              <span>
+                <span className="text-slate-400">Last synced: </span>
+                <span className="font-medium text-[#1e3a8a]">
+                  {sync.lastSyncedAt
+                    ? new Date(sync.lastSyncedAt).toLocaleString()
+                    : "never"}
+                </span>
+              </span>
+              <span>
+                <span className="text-slate-400">Waiting to send: </span>
+                <span className="font-medium text-[#1e3a8a]">
+                  {sync.pending} change{sync.pending === 1 ? "" : "s"}
+                </span>
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              You can keep working with no internet — changes are saved here and
+              sent up automatically the next time this computer is online.
+            </p>
+            {sync.lastError ? (
+              <p className="text-sm font-medium text-amber-600">
+                Last attempt didn't complete: {sync.lastError}
+              </p>
+            ) : null}
+            <div>
+              <Button
+                icon={RefreshCw}
+                onClick={handleSyncNow}
+                disabled={syncBusy || sync.syncing}
+              >
+                {syncBusy || sync.syncing ? "Syncing…" : "Sync Now"}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Account security */}
+      <Card className="mt-6">
+        <CardHeader
+          title="Your Password"
+          subtitle="Change the password for the account you're signed in as"
+          action={<UserCog size={18} className="text-slate-300" />}
+        />
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="pwCurrent">Current password</Label>
+            <Input
+              id="pwCurrent"
+              type="password"
+              autoComplete="current-password"
+              value={pw.current}
+              onChange={(e) => setPw({ ...pw, current: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="pwNew">New password</Label>
+            <Input
+              id="pwNew"
+              type="password"
+              autoComplete="new-password"
+              value={pw.next}
+              onChange={(e) => setPw({ ...pw, next: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="pwConfirm">Confirm new password</Label>
+            <Input
+              id="pwConfirm"
+              type="password"
+              autoComplete="new-password"
+              value={pw.confirm}
+              onChange={(e) => setPw({ ...pw, confirm: e.target.value })}
+            />
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">
+          At least 8 characters. Anyone who has used this account before will
+          still be signed in on their own device until they log out.
+        </p>
+        {pwError && (
+          <p className="mt-2 text-sm font-medium text-red-500">{pwError}</p>
+        )}
+        <div className="mt-4">
+          <Button
+            icon={Save}
+            onClick={handleChangePassword}
+            disabled={pwBusy || !pw.current || !pw.next}
+          >
+            {pwBusy ? "Saving…" : "Change Password"}
+          </Button>
+        </div>
+      </Card>
+
+      {/* Licence */}
+      <Card className="mt-6">
+        <CardHeader
+          title="Licence"
+          subtitle="Your subscription status and licence key"
+          action={<KeyRound size={18} className="text-slate-300" />}
+        />
+        <div className="flex flex-col gap-4">
+          {license && (
+            <div
+              className={`rounded-lg border px-4 py-3 ${
+                license.readOnly
+                  ? "border-amber-300 bg-amber-50"
+                  : "border-emerald-200 bg-emerald-50"
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge>{license.status}</Badge>
+                {license.school && (
+                  <span className="text-sm font-medium text-[#1e3a8a]">
+                    {license.school}
+                  </span>
+                )}
+              </div>
+              <p className="mt-2 text-sm text-slate-600">{license.message}</p>
+              {!license.readOnly && license.expires && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Expires {license.expires} — {license.daysRemaining} day
+                  {license.daysRemaining === 1 ? "" : "s"} remaining.
+                </p>
+              )}
+              {license.readOnly && (
+                <p className="mt-2 text-xs text-amber-900">
+                  Records can still be viewed, printed and backed up. Saving
+                  changes is paused until a valid licence is entered.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="licenseKey">
+              {license?.readOnly ? "Enter licence key" : "Replace licence key"}
+            </Label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="licenseKey"
+                value={licenseKey}
+                onChange={(e) => setLicenseKey(e.target.value)}
+                placeholder="Paste the licence key supplied with your subscription"
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <Button
+                icon={KeyRound}
+                onClick={handleActivateLicense}
+                disabled={licenseBusy || !licenseKey.trim()}
+              >
+                {licenseBusy ? "Checking…" : "Activate"}
+              </Button>
+            </div>
+            {licenseError && (
+              <p className="text-sm font-medium text-red-500">{licenseError}</p>
+            )}
+          </div>
+        </div>
+      </Card>
+
       {/* Data Backup */}
       <Card className="mt-6">
         <CardHeader
@@ -808,7 +1069,7 @@ export default function Settings() {
             <input
               ref={restoreInputRef}
               type="file"
-              accept=".ser"
+              accept=".json,application/json"
               className="hidden"
               onChange={handleRestoreFile}
             />
