@@ -13,9 +13,11 @@ import {
   writeFileSync,
   readdirSync,
   statSync,
+  createWriteStream,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import https from "node:https";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -76,5 +78,49 @@ rmSync(publicDir, { recursive: true, force: true });
 mkdirSync(publicDir, { recursive: true });
 cpSync(distDir, publicDir, { recursive: true });
 
+// Bundle the Postgres JDBC driver so the desktop app can optionally connect
+// straight to a school's cloud database (see electron/main.cjs's
+// cloud-config.json support) — same jar/version the Docker image downloads.
+function downloadFile(url, dest) {
+  return new Promise((resolve, reject) => {
+    const file = createWriteStream(dest);
+    https
+      .get(url, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          file.close();
+          downloadFile(res.headers.location, dest).then(resolve, reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error(`Download failed (${res.statusCode}): ${url}`));
+          return;
+        }
+        res.pipe(file);
+        file.on("finish", () => file.close(resolve));
+      })
+      .on("error", (err) => {
+        file.close();
+        reject(err);
+      });
+  });
+}
+
+const libDir = path.join(STAGE, "lib");
+mkdirSync(libDir, { recursive: true });
+const pgJar = path.join(libDir, "postgresql.jar");
+if (!existsSync(pgJar)) {
+  console.log("Downloading Postgres JDBC driver…");
+  try {
+    await downloadFile(
+      "https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.5/postgresql-42.7.5.jar",
+      pgJar,
+    );
+  } catch (err) {
+    console.warn(
+      `Could not download Postgres JDBC driver (${err.message}). Cloud-sync mode won't work in this build; local file storage is unaffected.`,
+    );
+  }
+}
+
 console.log(`Staged backend at ${STAGE}`);
-console.log("  classes + public/ ready for electron-builder extraResources");
+console.log("  classes + public/ + lib/ ready for electron-builder extraResources");

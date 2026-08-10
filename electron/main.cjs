@@ -58,24 +58,117 @@ function resolveJavaBinary() {
   return "java";
 }
 
+// Optional cloud-sync config: if the admin fills in a Postgres connection
+// string here, the desktop app connects directly to that shared database
+// instead of its local file — so marks teachers enter online (on the
+// hosted web app) show up here whenever this PC is online. Left blank,
+// nothing changes: the app works exactly as before, fully offline.
+const CLOUD_CONFIG_PATH = path.join(USER_DATA_DIR, "cloud-config.json");
+const CLOUD_CONFIG_README_PATH = path.join(
+  USER_DATA_DIR,
+  "CLOUD-SYNC-README.txt",
+);
+
+function ensureCloudConfig() {
+  try {
+    if (!fs.existsSync(USER_DATA_DIR)) {
+      fs.mkdirSync(USER_DATA_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(CLOUD_CONFIG_PATH)) {
+      fs.writeFileSync(
+        CLOUD_CONFIG_PATH,
+        JSON.stringify({ databaseUrl: "" }, null, 2),
+        "utf8",
+      );
+    }
+    if (!fs.existsSync(CLOUD_CONFIG_README_PATH)) {
+      fs.writeFileSync(
+        CLOUD_CONFIG_README_PATH,
+        [
+          "Cloud Sync — Report Card Management System",
+          "===========================================",
+          "",
+          "By default this app stores all data in a local file on this PC.",
+          "",
+          "To make it receive marks that teachers enter online (from home,",
+          "phone, anywhere), paste your Postgres connection string into",
+          "cloud-config.json in this same folder, e.g.:",
+          "",
+          '  { "databaseUrl": "postgresql://user:pass@host:5432/dbname" }',
+          "",
+          "Then fully close and reopen this app. Whenever this PC has an",
+          "internet connection, it will read and write the same shared",
+          "database that the teachers' online dashboards use. Leave",
+          '"databaseUrl" as an empty string to go back to local-only mode.',
+        ].join("\n"),
+        "utf8",
+      );
+    }
+  } catch (err) {
+    console.error("[electron] Could not set up cloud-config.json:", err.message);
+  }
+}
+
+function readCloudDatabaseUrl() {
+  try {
+    const raw = fs.readFileSync(CLOUD_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed.databaseUrl === "string" ? parsed.databaseUrl.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+// Locates the bundled Postgres JDBC driver (only needed when cloud-config's
+// databaseUrl is set). Checked in both packaged and dev layouts.
+function resolvePostgresJar() {
+  const candidates = [
+    isPackaged
+      ? path.join(process.resourcesPath, "backend", "lib", "postgresql.jar")
+      : null,
+    path.join(__dirname, "..", "staging", "backend", "lib", "postgresql.jar"),
+    path.join(BACKEND_DIR, "lib", "postgresql.jar"),
+  ].filter(Boolean);
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
 function startJavaBackend() {
   const javaBin = resolveJavaBinary();
+  const databaseUrl = readCloudDatabaseUrl();
 
   console.log("DEBUG USER_DATA_DIR:", USER_DATA_DIR);
   console.log("DEBUG PUBLIC_DIR:", PUBLIC_DIR);
   console.log("DEBUG BACKEND_DIR:", BACKEND_DIR);
   console.log("DEBUG javaBin:", javaBin);
+  console.log("DEBUG cloud sync:", databaseUrl ? "ENABLED" : "disabled (local file storage)");
+
+  const pgJar = databaseUrl ? resolvePostgresJar() : null;
+  if (databaseUrl && !pgJar) {
+    console.warn(
+      "[electron] cloud-config.json has a databaseUrl set, but the bundled Postgres driver was not found — falling back to local file storage.",
+    );
+  }
+
+  const spawnArgs = [];
+  if (pgJar) {
+    spawnArgs.push("-cp", `.${path.delimiter}${pgJar}`);
+  }
+  spawnArgs.push("com.reportcard.Main", USER_DATA_DIR, PUBLIC_DIR);
+
+  // Always keep this process bound to localhost only — cloud sync means
+  // *this PC* reads/writes the shared database as a client, not that other
+  // devices on the network can reach this PC's copy of the app.
+  const spawnEnv = { ...process.env, BIND_HOST: "127.0.0.1" };
+  if (pgJar) {
+    spawnEnv.DATABASE_URL = databaseUrl;
+  }
 
   // No "shell: true" here — critical. With a shell, arguments are joined
   // into one string without escaping, so any path containing a space
   // (e.g. "C:\\Users\\Nyuydine Cedric\\...") silently splits into multiple
   // arguments. Passing the args array directly to spawn keeps each
   // argument intact regardless of spaces.
-  javaProcess = spawn(
-    javaBin,
-    ["com.reportcard.Main", USER_DATA_DIR, PUBLIC_DIR],
-    { cwd: BACKEND_DIR },
-  );
+  javaProcess = spawn(javaBin, spawnArgs, { cwd: BACKEND_DIR, env: spawnEnv });
 
   javaProcess.stdout.on("data", (data) => {
     console.log(`[backend] ${data}`);
@@ -139,6 +232,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ensureCloudConfig();
   startJavaBackend();
   createWindow();
 

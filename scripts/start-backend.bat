@@ -36,5 +36,21 @@ if exist "%PUBLIC%" rmdir /s /q "%PUBLIC%"
 mkdir "%PUBLIC%"
 xcopy "dist" "%PUBLIC%" /E /I /Y >nul
 
+REM Optional: if DATABASE_URL is set in this shell (e.g. `set DATABASE_URL=...`
+REM before running this script), fetch the Postgres JDBC driver so cloud-sync
+REM mode can be tested locally without a full installer rebuild.
+set LIB=%OUT%\lib
+set PGJAR=%LIB%\postgresql.jar
+if not "%DATABASE_URL%"=="" (
+  if not exist "%PGJAR%" (
+    if not exist "%LIB%" mkdir "%LIB%"
+    echo Downloading Postgres JDBC driver...
+    powershell -Command "Invoke-WebRequest -Uri 'https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.5/postgresql-42.7.5.jar' -OutFile '%PGJAR%'"
+  )
+)
+
+set CP=%OUT%
+if exist "%PGJAR%" set CP=%OUT%;%PGJAR%
+
 echo Starting backend on http://127.0.0.1:8080
-java -cp "%OUT%" com.reportcard.Main "%DATA%" "%PUBLIC%"
+java -cp "%CP%" com.reportcard.Main "%DATA%" "%PUBLIC%"

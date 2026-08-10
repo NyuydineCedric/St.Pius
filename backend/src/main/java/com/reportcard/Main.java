@@ -143,8 +143,10 @@ public class Main {
         }
         HttpServer server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
 
+        boolean cloudStorage = databaseUrl != null && !databaseUrl.isBlank();
         server.createContext("/api/health", exchange -> {
-            String json = "{\"status\":\"UP\",\"service\":\"report-card-backend\",\"message\":\"Backend is running\"}";
+            String json = "{\"status\":\"UP\",\"service\":\"report-card-backend\",\"message\":\"Backend is running\",\"storage\":\""
+                    + (cloudStorage ? "postgres" : "file") + "\"}";
             sendJson(exchange, 200, json);
         });
 

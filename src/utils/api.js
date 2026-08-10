@@ -104,6 +104,14 @@ export async function getAuthStatus() {
   return res.json();
 }
 
+// No auth required — used to show whether this instance is running on
+// local file storage or a shared cloud database (see Settings > Cloud Sync).
+export async function getHealth() {
+  const res = await fetch(API_BASE + "/api/health");
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export function login(email, password) {
   return postAuthJson("/api/login", { email, password });
 }
