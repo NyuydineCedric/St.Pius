@@ -12,6 +12,9 @@ import {
   Plus,
   GraduationCap,
   Search,
+  Download,
+  Upload,
+  Database,
 } from "lucide-react";
 import {
   Card,
@@ -33,6 +36,8 @@ import {
   deleteTeacher,
   getClasses,
   assignClassMaster,
+  downloadBackup,
+  restoreBackup,
 } from "../../utils/api";
 import { ALL_SUBJECTS, compareClassNames } from "../../utils/subjects";
 import { catLabel } from "../../utils/grading";
@@ -93,6 +98,47 @@ export default function Settings() {
 
   const [classes, setClasses] = useState([]);
   const [teacherSearch, setTeacherSearch] = useState("");
+
+  // Data backup / restore
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMsg, setBackupMsg] = useState("");
+  const [backupError, setBackupError] = useState("");
+  const restoreInputRef = useRef(null);
+
+  async function handleDownloadBackup() {
+    setBackupBusy(true);
+    setBackupError("");
+    setBackupMsg("");
+    try {
+      await downloadBackup();
+      setBackupMsg("Backup downloaded.");
+    } catch (err) {
+      setBackupError(err.message || "Could not download backup");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleRestoreFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const confirmed = window.confirm(
+      "This will replace ALL current data — students, classes, marks, and staff — with the contents of this backup file. This cannot be undone unless you have another backup. Continue?",
+    );
+    if (!confirmed) return;
+    setBackupBusy(true);
+    setBackupError("");
+    setBackupMsg("");
+    try {
+      await restoreBackup(file);
+      setBackupMsg("Data restored successfully. Reloading…");
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+      setBackupError(err.message || "Could not restore backup");
+      setBackupBusy(false);
+    }
+  }
 
   useEffect(() => {
     Promise.all([getSettings(), getTeachers(), getClasses()])
@@ -658,6 +704,69 @@ export default function Settings() {
           </div>
         </Card>
       </div>
+
+      {/* Data Backup */}
+      <Card className="mt-6">
+        <CardHeader
+          title="Data Backup"
+          subtitle="Save a copy of all your data, or restore from a previous backup"
+          action={<Database size={18} className="text-slate-300" />}
+        />
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-[#e2e8f0] px-4 py-3">
+            <div>
+              <div className="text-sm font-medium text-[#1e3a8a]">
+                Download a backup
+              </div>
+              <p className="text-xs text-slate-400">
+                Saves every student, class, mark, and staff record to a file.
+                Keep it somewhere safe — a USB drive, cloud folder, or email
+                to yourself.
+              </p>
+            </div>
+            <Button
+              icon={Download}
+              onClick={handleDownloadBackup}
+              disabled={backupBusy}
+            >
+              {backupBusy ? "Working…" : "Download Backup"}
+            </Button>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-[#e2e8f0] px-4 py-3">
+            <div>
+              <div className="text-sm font-medium text-[#1e3a8a]">
+                Restore from a backup
+              </div>
+              <p className="text-xs text-slate-400">
+                Replaces all current data with a previously downloaded
+                backup file. Use this only if you need to recover lost data.
+              </p>
+            </div>
+            <Button
+              icon={Upload}
+              onClick={() => restoreInputRef.current?.click()}
+              disabled={backupBusy}
+            >
+              {backupBusy ? "Working…" : "Restore from Backup"}
+            </Button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".ser"
+              className="hidden"
+              onChange={handleRestoreFile}
+            />
+          </div>
+
+          {backupMsg && (
+            <p className="text-sm font-medium text-[#10b981]">{backupMsg}</p>
+          )}
+          {backupError && (
+            <p className="text-sm font-medium text-red-500">{backupError}</p>
+          )}
+        </div>
+      </Card>
 
       {/* Staff Management */}
       <Card className="mt-6">

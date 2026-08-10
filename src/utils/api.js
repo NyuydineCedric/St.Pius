@@ -224,3 +224,41 @@ export function saveSettings(partial) {
 export function assignClassMaster(className, teacherId) {
   return postJson("/api/classes/master", { class: className, teacherId });
 }
+
+// Triggers a browser download of the current data backup file. Throws if
+// this server doesn't support local-file backups (e.g. cloud/Postgres mode).
+export async function downloadBackup() {
+  const res = await fetch(API_BASE + "/api/backup", { headers: authHeaders() });
+  handleUnauthorized(res);
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : `report-card-backup-${Date.now()}.ser`;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Uploads a previously downloaded backup file to replace the server's live
+// data. The backend validates the file and keeps a safety copy before
+// touching anything, then reloads in place — no restart needed.
+export async function restoreBackup(file) {
+  const res = await fetch(API_BASE + "/api/backup/restore", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/octet-stream" }),
+    body: file,
+  });
+  handleUnauthorized(res);
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return await res.json();
+}

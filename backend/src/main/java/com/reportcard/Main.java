@@ -165,6 +165,8 @@ public class Main {
         server.createContext("/api/academic-years", requireAuth(new AcademicYearsHandler()));
         // Local/demo only: wipe + load GBHS Bamenda sample data.
         server.createContext("/api/demo/seed", withCors(new DemoSeedHandler()));
+        server.createContext("/api/backup", requireAdmin(new BackupHandler()));
+        server.createContext("/api/backup/restore", requireAdmin(new BackupRestoreHandler()));
 
         // Static frontend files (the built React app). Registered last / at
         // root so it acts as the catch-all for anything not matched by an
@@ -1119,6 +1121,89 @@ public class Main {
         }
     }
 
+    // GET /api/backup — admin only. Streams the raw local data file (the
+    // same one FileDataStore reads/writes) so an admin can save it
+    // somewhere safe (USB drive, cloud folder, email to themselves).
+    static class BackupHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            File f = store.getBackupFile();
+            if (f == null) {
+                sendJson(exchange, 400,
+                        "{\"error\":\"Backups aren't needed here — this server stores data in a managed database, not a local file.\"}");
+                return;
+            }
+            // Flush whatever is currently in memory before handing out the
+            // file, so the download always reflects the latest saved marks.
+            store.save();
+            if (!f.exists()) {
+                sendJson(exchange, 404, "{\"error\":\"No data has been saved yet\"}");
+                return;
+            }
+            byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+            String stamp = java.time.LocalDate.now().toString();
+            exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+            exchange.getResponseHeaders().add("Content-Disposition",
+                    "attachment; filename=\"report-card-backup-" + stamp + ".ser\"");
+            exchange.sendResponseHeaders(200, data.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(data);
+            }
+        }
+    }
+
+    // POST /api/backup/restore — admin only. Body is the raw bytes of a file
+    // previously downloaded from /api/backup. Validates it before touching
+    // anything on disk, keeps a safety copy of whatever was live, then
+    // reloads the running server from the restored file (no restart needed).
+    static class BackupRestoreHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            File f = store.getBackupFile();
+            if (f == null) {
+                sendJson(exchange, 400,
+                        "{\"error\":\"Restoring from a file isn't supported here — this server stores data in a managed database.\"}");
+                return;
+            }
+            byte[] uploaded = exchange.getRequestBody().readAllBytes();
+            if (uploaded.length == 0) {
+                sendJson(exchange, 400, "{\"error\":\"No file received\"}");
+                return;
+            }
+            try (ObjectInputStream ois = new ObjectInputStream(new java.io.ByteArrayInputStream(uploaded))) {
+                Object obj = ois.readObject();
+                if (!(obj instanceof Map)) {
+                    throw new IOException("Not a valid backup file");
+                }
+            } catch (Exception ex) {
+                sendJson(exchange, 400, "{\"error\":\"That file doesn't look like a valid backup\"}");
+                return;
+            }
+            try {
+                File safety = new File(f.getAbsolutePath() + ".pre-restore.bak");
+                if (f.exists()) {
+                    java.nio.file.Files.copy(f.toPath(), safety.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (IOException ignored) {
+                // Best-effort safety copy — never block a restore over it.
+            }
+            java.nio.file.Files.write(f.toPath(), uploaded);
+            store.reload();
+            store.logActivity("backup", "Data restored from an uploaded backup file");
+            store.save();
+            sendJson(exchange, 200, "{\"status\":\"ok\"}");
+        }
+    }
+
     // Data classes — shared by both storage backends.
     static class Student implements Serializable {
         private static final long serialVersionUID = 1L;
@@ -1420,6 +1505,21 @@ public class Main {
 
         /** Create or update a login account by email (demo seeding). */
         void ensureUser(String name, String email, String passwordHash, String role);
+
+        /**
+         * The raw on-disk file backing this store, for download as a backup.
+         * Returns null for stores that aren't file-based (e.g. Postgres,
+         * where the data already lives safely in a managed database).
+         */
+        File getBackupFile();
+
+        /**
+         * Re-reads all data from the backing store, discarding whatever is
+         * currently in memory. Used right after a backup file is restored so
+         * the running app picks up the new data without a restart. No-op for
+         * stores that always read live (e.g. Postgres).
+         */
+        void reload();
     }
 
     // Original file-based storage, adapted from static methods to an
@@ -2064,6 +2164,16 @@ public class Main {
                 return;
             }
             addUser(name, email, passwordHash, role);
+        }
+
+        @Override
+        public File getBackupFile() {
+            return dataFile;
+        }
+
+        @Override
+        public synchronized void reload() {
+            load();
         }
     }
 
@@ -3147,6 +3257,19 @@ public class Main {
                 return;
             }
             addUser(name, email, passwordHash, role);
+        }
+
+        @Override
+        public File getBackupFile() {
+            // Not file-based — data already lives safely in the managed
+            // Postgres database, so there's nothing local to download here.
+            return null;
+        }
+
+        @Override
+        public void reload() {
+            // No-op: every method above reads live from the database, so
+            // there's no in-memory snapshot that needs refreshing.
         }
     }
 }
