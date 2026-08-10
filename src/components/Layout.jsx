@@ -410,7 +410,11 @@ export default function Layout() {
           className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 print:hidden"
         >
           <span className="font-semibold">Read-only —</span>
-          <span>{license.message}</span>
+          <span>
+            {user?.role === "admin"
+              ? license.message
+              : "This school’s licence is inactive. Ask your school administrator to activate or renew it. You can still view and print existing records."}
+          </span>
           {user?.role === "admin" && (
             <NavLink
               to="/admin/settings"
