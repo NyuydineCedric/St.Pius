@@ -121,7 +121,10 @@ export function logout() {
 }
 
 export function register(name, email, password, role) {
-  return postAuthJson("/api/register", { name, email, password, role }, true);
+  // Public signup — do not attach a leftover session token. Sending
+  // Authorization on register triggers a CORS preflight and can confuse
+  // debugging when a stale token is sitting in localStorage.
+  return postAuthJson("/api/register", { name, email, password, role }, false);
 }
 
 export async function putJson(path, data) {
