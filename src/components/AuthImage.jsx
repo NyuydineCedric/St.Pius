@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authHeaders } from "../utils/api";
+import { authHeaders, apiUrl } from "../utils/api";
 
 // Student photos live in a private Supabase bucket and are served by the
 // backend at /api/students/{id}/photo, which requires the bearer token. A
@@ -28,15 +28,24 @@ export default function AuthImage({ src, alt, className, fallback = null }) {
   const resolved = !src ? null : isRemote(src) ? cache.get(src) || fetched : src;
 
   useEffect(() => {
+    setFailed(false);
+    setFetched(null);
     // Inline data URLs and already-cached object URLs are resolved during
-    // render via useState's initialiser, so there is nothing to do here and
-    // no synchronous setState (which would cause a cascading re-render).
-    if (!src || !isRemote(src) || cache.has(src)) return;
+    // render, so there is nothing to do here.
+    if (!src || !isRemote(src)) return;
+    if (cache.has(src)) {
+      setFetched(cache.get(src));
+      return;
+    }
 
     let cancelled = false;
-    fetch(src, { headers: authHeaders() })
+    // Must go through apiUrl — on Vercel a bare `/api/...` fetch hits the
+    // SPA host, which returns index.html (200) and produces a broken <img>.
+    fetch(apiUrl(src), { headers: authHeaders() })
       .then((res) => {
         if (!res.ok) throw new Error(String(res.status));
+        const type = res.headers.get("content-type") || "";
+        if (!type.startsWith("image/")) throw new Error("not an image");
         return res.blob();
       })
       .then((blob) => {

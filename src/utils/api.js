@@ -5,6 +5,22 @@ const API_BASE = import.meta.env.DEV
 const TOKEN_KEY = "authToken";
 export const AUTH_EXPIRED_EVENT = "reportcard:auth-expired";
 
+/** Absolute URL for an API path. Needed when the SPA is on a different host
+ *  (Vercel) than the backend (Render) — relative `/api/...` would hit Vercel. */
+export function apiUrl(path) {
+  if (!path) return path;
+  if (
+    path.startsWith("http://") ||
+    path.startsWith("https://") ||
+    path.startsWith("data:") ||
+    path.startsWith("blob:")
+  ) {
+    return path;
+  }
+  if (path.startsWith("/")) return `${API_BASE}${path}`;
+  return path;
+}
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
