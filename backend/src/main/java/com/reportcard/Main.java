@@ -722,6 +722,13 @@ public class Main {
                 store.save();
                 user = store.findUserByEmail(email);
             }
+            // Teachers who registered before staff profiles were created on
+            // signup can sign in but cannot use the school. Heal that here.
+            if ("teacher".equals(user.role) && store.findTeacherByEmail(user.email) == null) {
+                store.addTeacher(user.name, user.email, "");
+                store.save();
+                System.out.println("Login: created missing staff profile for " + user.email);
+            }
             String token = sessions.create(user);
             sendJson(exchange, 200, authUserJson(user, token));
         }
@@ -743,6 +750,10 @@ public class Main {
     // First account (no admin yet) may register as admin (bootstrap).
     // After that, public registration is teacher-only. Creating another
     // admin requires an authenticated admin session.
+    //
+    // Teacher signup creates both the login account AND a staff profile.
+    // Without the staff row, the teacher can sign in but cannot "join" the
+    // school — marks, roster and dashboard all look up staff by email.
     static class RegisterHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -750,59 +761,77 @@ public class Main {
                 sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
                 return;
             }
-            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            Map<String, String> obj = parseJsonObject(body);
-            String name = obj.getOrDefault("name", "").trim();
-            String email = obj.getOrDefault("email", "").trim();
-            String password = obj.getOrDefault("password", "");
-            String role = obj.getOrDefault("role", "teacher").trim();
+            try {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                Map<String, String> obj = parseJsonObject(body);
+                String name = obj.getOrDefault("name", "").trim();
+                String email = obj.getOrDefault("email", "").trim();
+                String password = obj.getOrDefault("password", "");
+                String role = obj.getOrDefault("role", "teacher").trim();
 
-            if (name.isEmpty() || email.isEmpty() || password.isEmpty()) {
-                sendJson(exchange, 400, "{\"error\":\"Name, email, and password are required\"}");
-                return;
-            }
-            if (password.length() < 6) {
-                sendJson(exchange, 400, "{\"error\":\"Password must be at least 6 characters\"}");
-                return;
-            }
-            if (!"admin".equals(role) && !"teacher".equals(role)) {
-                role = "teacher";
-            }
-
-            boolean hasAdmin = store.hasAdmin();
-
-            // Creating accounts is a write, so it needs a licence — but the
-            // very first admin must be able to register on a brand-new
-            // install, otherwise setup deadlocks: activating a licence
-            // requires an admin, and creating an admin would require a
-            // licence. Bootstrap is exempt; everyone after is not.
-            License current = license;
-            if (hasAdmin && current != null && !current.allowsWrites()) {
-                sendJson(exchange, 402,
-                        "{\"error\":\"" + escapeJson(current.message) + "\",\"readOnly\":true}");
-                return;
-            }
-
-            Session caller = sessions.resolve(exchange);
-            if ("admin".equals(role)) {
-                if (hasAdmin && (caller == null || !"admin".equals(caller.role))) {
-                    sendJson(exchange, 403, "{\"error\":\"Admin accounts can only be created by an existing admin\"}");
+                if (name.isEmpty() || email.isEmpty() || password.isEmpty()) {
+                    sendJson(exchange, 400, "{\"error\":\"Name, email, and password are required\"}");
                     return;
                 }
-            } else if (!hasAdmin) {
-                // Force first account to be admin so the school is never
-                // stuck without an administrator.
-                role = "admin";
-            }
+                if (password.length() < 6) {
+                    sendJson(exchange, 400, "{\"error\":\"Password must be at least 6 characters\"}");
+                    return;
+                }
+                if (!"admin".equals(role) && !"teacher".equals(role)) {
+                    role = "teacher";
+                }
 
-            if (store.findUserByEmail(email) != null) {
-                sendJson(exchange, 409, "{\"error\":\"An account with that email already exists\"}");
-                return;
-            }
+                boolean hasAdmin = store.hasAdmin();
 
-            User user = store.addUser(name, email, Passwords.hash(password), role);
-            store.save();
-            sendJson(exchange, 201, user.toJson());
+                // Creating accounts is a write, so it needs a licence — but the
+                // very first admin must be able to register on a brand-new
+                // install, otherwise setup deadlocks: activating a licence
+                // requires an admin, and creating an admin would require a
+                // licence. Bootstrap is exempt; everyone after is not.
+                License current = license;
+                if (hasAdmin && current != null && !current.allowsWrites()) {
+                    System.out.println("Register refused (read-only licence) for " + email);
+                    sendJson(exchange, 402,
+                            "{\"error\":\"" + escapeJson(current.message) + "\",\"readOnly\":true}");
+                    return;
+                }
+
+                Session caller = sessions.resolve(exchange);
+                if ("admin".equals(role)) {
+                    if (hasAdmin && (caller == null || !"admin".equals(caller.role))) {
+                        sendJson(exchange, 403, "{\"error\":\"Admin accounts can only be created by an existing admin\"}");
+                        return;
+                    }
+                } else if (!hasAdmin) {
+                    // Force first account to be admin so the school is never
+                    // stuck without an administrator.
+                    role = "admin";
+                }
+
+                if (store.findUserByEmail(email) != null) {
+                    sendJson(exchange, 409, "{\"error\":\"An account with that email already exists\"}");
+                    return;
+                }
+
+                User user = store.addUser(name, email, Passwords.hash(password), role);
+                // Teachers need a staff profile to appear in the school. If the
+                // admin already added them under Staff Management, reuse that
+                // row (matched by email) instead of creating a duplicate.
+                if ("teacher".equals(role) && store.findTeacherByEmail(email) == null) {
+                    store.addTeacher(name, email, "");
+                }
+                store.save();
+                System.out.println("Register ok: " + role + " " + email);
+                sendJson(exchange, 201, user.toJson());
+            } catch (RuntimeException e) {
+                // HttpServer swallows handler exceptions at FINER — they never
+                // show up in Render logs, so teachers "cannot join" with no clue.
+                System.err.println("Register failed: " + e.getMessage());
+                e.printStackTrace(System.err);
+                sendJson(exchange, 500,
+                        "{\"error\":\"" + escapeJson(e.getMessage() == null ? "Registration failed" : e.getMessage())
+                                + "\"}");
+            }
         }
     }
 

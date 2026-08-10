@@ -169,10 +169,14 @@ final class SupabaseStorage {
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            // 409 = already exists, which is the normal case after first run.
-            if (response.statusCode() / 100 != 2 && response.statusCode() != 409)
-                System.err.println("Could not create storage bucket (" + response.statusCode() + "): "
-                        + response.body());
+            // Supabase sometimes returns HTTP 400 with a JSON body whose
+            // statusCode is 409 / BucketAlreadyExists — treat that as success.
+            if (response.statusCode() / 100 == 2 || response.statusCode() == 409)
+                return;
+            String respBody = response.body() == null ? "" : response.body();
+            if (respBody.contains("BucketAlreadyExists") || respBody.contains("\"statusCode\":\"409\""))
+                return;
+            System.err.println("Could not create storage bucket (" + response.statusCode() + "): " + respBody);
         } catch (Exception e) {
             System.err.println("Could not create storage bucket: " + e.getMessage());
         }
