@@ -110,24 +110,60 @@ final class License {
     // ------------------------------------------------------------- loading
 
     /**
-     * Loads from LICENSE_KEY, else {@code license.key} in the data directory.
-     * Never throws — a broken license yields an INVALID result so the app can
-     * still start and explain itself.
+     * Raw token from {@code LICENSE_KEY} or {@code license.key}, or null when
+     * neither is set. Throws nothing — unreadable files yield null so the
+     * caller can try the shared-store fallback; {@link #load} reports the
+     * read error when that fallback is also missing.
+     */
+    static String readToken(File dataDir) {
+        String token = System.getenv("LICENSE_KEY");
+        if (token != null && !token.isBlank())
+            return token.trim();
+        if (dataDir == null)
+            return null;
+        File file = new File(dataDir, "license.key");
+        if (!file.isFile())
+            return null;
+        try {
+            String fromFile = Files.readString(file.toPath(), StandardCharsets.UTF_8).trim();
+            return fromFile.isBlank() ? null : fromFile;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Loads from LICENSE_KEY, else {@code license.key} in the data directory,
+     * else an optional shared-store fallback (the school-wide key the admin
+     * activated). Never throws — a broken license yields an INVALID result so
+     * the app can still start and explain itself.
      */
     static License load(File dataDir) {
-        String token = System.getenv("LICENSE_KEY");
-        if (token == null || token.isBlank()) {
+        return load(dataDir, null);
+    }
+
+    static License load(File dataDir, String fallbackToken) {
+        String token = readToken(dataDir);
+        if ((token == null || token.isBlank()) && dataDir != null) {
             File file = new File(dataDir, "license.key");
             if (file.isFile()) {
                 try {
-                    token = Files.readString(file.toPath(), StandardCharsets.UTF_8).trim();
+                    Files.readString(file.toPath(), StandardCharsets.UTF_8);
                 } catch (Exception e) {
-                    return problem(Status.INVALID, "Could not read license.key: " + e.getMessage());
+                    // File exists but couldn't be read, and we have nothing
+                    // else to try yet — only fail hard if fallback is empty.
+                    if (fallbackToken == null || fallbackToken.isBlank())
+                        return problem(Status.INVALID, "Could not read license.key: " + e.getMessage());
                 }
             }
         }
+        if (token == null || token.isBlank()) {
+            if (fallbackToken != null && !fallbackToken.isBlank())
+                token = fallbackToken.trim();
+        }
         if (token == null || token.isBlank())
-            return problem(Status.MISSING, "No license installed. Enter the key supplied with your subscription.");
+            return problem(Status.MISSING,
+                    "No school licence installed. The school administrator must enter the key supplied with the subscription.");
         return verify(token.trim());
     }
 

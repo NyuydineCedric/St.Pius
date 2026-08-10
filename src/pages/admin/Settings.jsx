@@ -957,7 +957,7 @@ export default function Settings() {
       <Card className="mt-6">
         <CardHeader
           title="Licence"
-          subtitle="Your subscription status and licence key"
+          subtitle="School-wide subscription — one key covers every teacher on this install"
           action={<KeyRound size={18} className="text-slate-300" />}
         />
         <div className="flex flex-col gap-4">
@@ -987,7 +987,9 @@ export default function Settings() {
               {license.readOnly && (
                 <p className="mt-2 text-xs text-amber-900">
                   Records can still be viewed, printed and backed up. Saving
-                  changes is paused until a valid licence is entered.
+                  changes is paused until a valid school licence is activated.
+                  Teachers share this licence automatically — they do not need
+                  their own key.
                 </p>
               )}
             </div>

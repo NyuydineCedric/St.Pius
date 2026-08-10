@@ -148,6 +148,11 @@ final class SyncClient {
                 return false;
             }
 
+            // Push/pull the school licence before academic sync. /api/sync is
+            // licence-gated, so an unlicensed cloud would otherwise refuse every
+            // sync forever even when the desktop already has a valid key.
+            ensureSchoolLicense(store);
+
             String payload = buildPayload(store);
             HttpResponse<String> response = post("/api/sync", payload, token);
             if (response != null && response.statusCode() == 401) {
@@ -277,6 +282,64 @@ final class SyncClient {
         }
     }
 
+    /**
+     * Keeps the school licence aligned between this desktop and the shared
+     * server. Teachers inherit the same school key — there is no per-teacher
+     * licence — so activating once (anywhere) must reach every install.
+     */
+    private void ensureSchoolLicense(Main.DataStore store) {
+        File dataDir = stateFile.getParentFile();
+        String localKey = localLicenseKey(store, dataDir);
+
+        if (localKey != null && !localKey.isBlank()) {
+            try {
+                String body = "{\"key\":" + Json.str(localKey) + "}";
+                HttpResponse<String> activated = post("/api/license/activate", body, token);
+                if (activated != null && activated.statusCode() == 200) {
+                    // Cloud now has the key; teachers signing into the web app
+                    // share that process's licence automatically.
+                } else if (activated != null && activated.statusCode() == 401) {
+                    token = null;
+                }
+            } catch (Exception e) {
+                System.err.println("Sync: could not push school licence: " + e.getMessage());
+            }
+            return;
+        }
+
+        // Local install has no key — pull the school key the admin activated
+        // on the server (or on another desktop that already synced it up).
+        try {
+            HttpResponse<String> response = get("/api/license/key", token);
+            if (response == null || response.statusCode() != 200)
+                return;
+            String key = Json.getString(Json.parseObject(response.body()), "key", "");
+            if (key.isBlank())
+                return;
+            License verified = License.verify(key);
+            if (verified.status != License.Status.ACTIVE)
+                return;
+            try {
+                Files.writeString(new File(dataDir, "license.key").toPath(), key);
+            } catch (Exception e) {
+                System.err.println("Sync: could not save pulled licence key: " + e.getMessage());
+            }
+            store.setLicenseKey(key);
+            Main.installPulledLicense(verified);
+            System.out.println("Sync: pulled school licence for " + verified.school);
+        } catch (Exception e) {
+            System.err.println("Sync: could not pull school licence: " + e.getMessage());
+        }
+    }
+
+    private static String localLicenseKey(Main.DataStore store, File dataDir) {
+        String token = License.readToken(dataDir);
+        if (token != null && !token.isBlank())
+            return token;
+        String stored = store.getLicenseKey();
+        return (stored == null || stored.isBlank()) ? null : stored.trim();
+    }
+
     // -------------------------------------------------------------- http
 
     private boolean login() {
@@ -309,6 +372,21 @@ final class SyncClient {
                     .timeout(Duration.ofSeconds(120))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+            if (bearer != null)
+                builder.header("Authorization", "Bearer " + bearer);
+            return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private HttpResponse<String> get(String path, String bearer) {
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                    .uri(URI.create(serverUrl + path))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Accept", "application/json")
+                    .GET();
             if (bearer != null)
                 builder.header("Authorization", "Bearer " + bearer);
             return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());

@@ -225,7 +225,17 @@ public class Main {
         if (storageForBucket != null)
             storageForBucket.ensureBucket();
 
-        license = License.load(dataDir);
+        // School-scoped: one key covers every account on this install. Prefer
+        // env/file, then the shared store so a cloud restart (ephemeral disk)
+        // still finds the key the admin already activated.
+        String storedKey = store.getLicenseKey();
+        license = License.load(dataDir, storedKey);
+        if (license.allowsWrites()) {
+            String token = License.readToken(dataDir);
+            if (token == null || token.isBlank())
+                token = storedKey;
+            persistLicenseKey(token);
+        }
         System.out.println("Licence: " + license.status + " — " + license.message);
         if (!license.allowsWrites())
             System.out.println("  Running READ-ONLY: existing records can be viewed and printed, "
@@ -322,6 +332,9 @@ public class Main {
 
         server.createContext("/api/license", requireAuth(new LicenseHandler()));
         server.createContext("/api/license/activate", requireAdmin(new LicenseActivateHandler()));
+        // Lets a desktop sync client pull the school key onto another machine
+        // after the admin activated it once (cloud or primary desktop).
+        server.createContext("/api/license/key", requireAdmin(new LicenseKeyHandler()));
 
         // Static frontend files (the built React app). Registered last / at
         // root so it acts as the catch-all for anything not matched by an
@@ -1904,7 +1917,8 @@ public class Main {
     }
 
     // POST /api/license/activate {"key":"..."} — admin only. Verifies the key
-    // and, if good, stores it so it survives a restart.
+    // and, if good, stores it so it survives a restart — both on disk and in
+    // the shared school store, so every teacher on this install inherits it.
     static class LicenseActivateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -1921,15 +1935,15 @@ public class Main {
 
             License candidate = License.verify(key);
             if (candidate.status != License.Status.ACTIVE) {
-                // Rejected keys are never written to disk, so a bad paste
-                // can't knock a working licence out.
+                // Rejected keys are never written, so a bad paste can't knock
+                // a working licence out.
                 sendJson(exchange, 400, "{\"error\":\"" + escapeJson(candidate.message) + "\",\"status\":\""
                         + candidate.status + "\"}");
                 return;
             }
 
             try {
-                java.nio.file.Files.writeString(new File(dataDirectory, "license.key").toPath(), key);
+                persistLicenseKey(key);
             } catch (IOException e) {
                 sendJson(exchange, 500,
                         "{\"error\":\"Licence is valid but could not be saved: " + escapeJson(e.getMessage()) + "\"}");
@@ -1941,6 +1955,44 @@ public class Main {
                     + " (expires " + candidate.expires + ")");
             sendJson(exchange, 200, candidate.toJson());
         }
+    }
+
+    // GET /api/license/key — admin only. Returns the raw school key so a
+    // desktop sync client can cache it locally after the admin activated
+    // once elsewhere. Never exposed to teachers.
+    static class LicenseKeyHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            String key = store.getLicenseKey();
+            if (key == null || key.isBlank())
+                key = License.readToken(dataDirectory);
+            if (key == null || key.isBlank()) {
+                sendJson(exchange, 404, "{\"error\":\"No school licence key is stored yet\"}");
+                return;
+            }
+            sendJson(exchange, 200, "{\"key\":" + Json.str(key) + "}");
+        }
+    }
+
+    /**
+     * Writes the school licence key to the local file and the shared store.
+     * Teachers never see this — they inherit whatever this install has loaded.
+     */
+    static void persistLicenseKey(String key) throws IOException {
+        if (key == null || key.isBlank())
+            return;
+        java.nio.file.Files.writeString(new File(dataDirectory, "license.key").toPath(), key.trim());
+        store.setLicenseKey(key.trim());
+    }
+
+    /** Applies a school licence that SyncClient pulled from the shared server. */
+    static void installPulledLicense(License verified) {
+        if (verified != null && verified.allowsWrites())
+            license = verified;
     }
 
     // Data classes — shared by both storage backends.
@@ -2328,6 +2380,15 @@ public class Main {
 
         SchoolSettings updateSettings(Map<String, String> fields);
 
+        /**
+         * School-wide licence key. One key covers every account (admin and
+         * teachers) on this install — it is not per-user. Empty string when
+         * none is stored. Never returned through the public settings JSON.
+         */
+        String getLicenseKey();
+
+        void setLicenseKey(String key);
+
         /** Clears students, teachers, marks, activities, and classes (keeps users). */
         void wipeAcademicData();
 
@@ -2430,6 +2491,9 @@ public class Main {
         private final List<Teacher> teachers = new ArrayList<>();
         private final List<User> users = new ArrayList<>();
         private SchoolSettings settings = new SchoolSettings();
+        // School-wide licence key. Kept outside SchoolSettings so it is never
+        // accidentally serialised into the public /api/settings JSON.
+        private String licenseKey = "";
         // Legacy, pre-academic-year layout (class -> subject -> sequence ->
         // studentId -> score). Only ever populated on load(), from data
         // written before this field existed, then migrated into
@@ -2504,6 +2568,9 @@ public class Main {
                         sessionsByToken.putAll((Map<String, Session>) se);
                     if (st instanceof SchoolSettings)
                         settings = (SchoolSettings) st;
+                    Object lk = m.get("licenseKey");
+                    if (lk instanceof String)
+                        licenseKey = (String) lk;
 
                     // One-time migration: marks recorded before academic-year
                     // scoping existed live in the old flat "marks" map — file
@@ -2595,6 +2662,7 @@ public class Main {
                     m.put("teachers", new ArrayList<>(teachers));
                     m.put("users", new ArrayList<>(users));
                     m.put("settings", settings);
+                    m.put("licenseKey", licenseKey == null ? "" : licenseKey);
                     m.put("sessions", new HashMap<>(sessionsByToken));
                     oos.writeObject(m);
                 }
@@ -3013,6 +3081,17 @@ public class Main {
         @Override
         public synchronized SchoolSettings getSettings() {
             return settings;
+        }
+
+        @Override
+        public synchronized String getLicenseKey() {
+            return licenseKey == null ? "" : licenseKey;
+        }
+
+        @Override
+        public synchronized void setLicenseKey(String key) {
+            licenseKey = key == null ? "" : key.trim();
+            save();
         }
 
         @Override
@@ -3468,6 +3547,10 @@ public class Main {
                     ALTER TABLE settings ADD COLUMN IF NOT EXISTS principal_stamp TEXT DEFAULT '';
                     ALTER TABLE settings ADD COLUMN IF NOT EXISTS principal_signature TEXT DEFAULT '';
                     ALTER TABLE settings ADD COLUMN IF NOT EXISTS next_term_begins TEXT DEFAULT '';
+                    -- School-wide licence key. Survives ephemeral disks (Render
+                    -- free tier) where license.key would otherwise vanish on
+                    -- every restart — teachers share whatever the admin set.
+                    ALTER TABLE settings ADD COLUMN IF NOT EXISTS license_key TEXT DEFAULT '';
                     CREATE TABLE IF NOT EXISTS keep_alive (
                         id INT PRIMARY KEY DEFAULT 1,
                         pinged_at TIMESTAMPTZ DEFAULT now()
@@ -4418,6 +4501,34 @@ public class Main {
                 throw new RuntimeException("updateSettings failed: " + e.getMessage(), e);
             }
             return s;
+        }
+
+        @Override
+        public String getLicenseKey() {
+            try (Connection c = connect();
+                    Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT license_key FROM settings WHERE id = 1")) {
+                if (rs.next()) {
+                    String key = rs.getString("license_key");
+                    return key == null ? "" : key;
+                }
+            } catch (SQLException e) {
+                System.err.println("getLicenseKey failed: " + e.getMessage());
+            }
+            return "";
+        }
+
+        @Override
+        public void setLicenseKey(String key) {
+            String value = key == null ? "" : key.trim();
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "UPDATE settings SET license_key = ? WHERE id = 1")) {
+                ps.setString(1, value);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new RuntimeException("setLicenseKey failed: " + e.getMessage(), e);
+            }
         }
 
         @Override
