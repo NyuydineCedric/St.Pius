@@ -994,7 +994,15 @@ public class Main {
                     // before it ever reaches the database.
                     if (obj.containsKey("photo")) {
                         obj = new HashMap<>(obj);
-                        obj.put("photo", storePhotoIfPossible(studentId, obj.get("photo")));
+                        String incoming = obj.get("photo");
+                        // The UI may echo back "/api/students/{id}/photo" from
+                        // a previous read. That is a delivery URL, not a stored
+                        // value — saving it would orphan the real bucket object.
+                        if (incoming != null && incoming.startsWith("/api/")) {
+                            obj.remove("photo");
+                        } else {
+                            obj.put("photo", storePhotoIfPossible(studentId, incoming));
+                        }
                     }
                     Student updated = store.updateStudent(studentId, obj);
                     if (updated == null) {
@@ -1643,7 +1651,22 @@ public class Main {
                 }
             } else {
                 SupabaseStorage storage = SupabaseStorage.get();
-                bytes = storage == null ? null : storage.download(student.photo);
+                String path = student.photo;
+                // Heal records that accidentally saved the API delivery URL
+                // instead of the bucket object path.
+                if (path != null && path.startsWith("/api/")) {
+                    path = SupabaseStorage.studentPhotoPath(studentId);
+                    try {
+                        store.updateStudent(studentId, Map.of("photo", path));
+                        store.save();
+                    } catch (RuntimeException e) {
+                        System.err.println("Could not heal photo path for " + studentId + ": " + e.getMessage());
+                    }
+                }
+                bytes = storage == null ? null : storage.download(path);
+                if (bytes == null && path != null && !path.equals(SupabaseStorage.studentPhotoPath(studentId))) {
+                    bytes = storage == null ? null : storage.download(SupabaseStorage.studentPhotoPath(studentId));
+                }
                 if (bytes == null) {
                     sendJson(exchange, 502, "{\"error\":\"Photo storage is unavailable\"}");
                     return;

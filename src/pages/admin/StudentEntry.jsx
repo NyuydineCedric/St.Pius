@@ -268,9 +268,14 @@ export default function StudentEntry() {
       dob: form.dob || "—",
       option: streamRequired ? form.option : "",
       electives: streamRequired ? form.electives.join(",") : "",
-      photo: form.photo || "",
       admittedOn: form.admittedOn || "",
     };
+    // Only send photo when it changed: a fresh data URL, or an explicit
+    // clear. The editor loads photos as "/api/students/{id}/photo" — writing
+    // that alias back would overwrite the real storage path in the database.
+    if (!form.photo || form.photo.startsWith("data:")) {
+      payload.photo = form.photo || "";
+    }
     try {
       if (editingId) {
         const student = await updateStudent(editingId, payload);
