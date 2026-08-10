@@ -2,6 +2,19 @@
 REM Compile and run the Java API (Windows). Prefer scripts\start-backend.sh on Git Bash.
 setlocal EnableDelayedExpansion
 cd /d "%~dp0.."
+
+REM Load .env if present. Java reads config only from the process
+REM environment, so without this the file is dead weight for the backend.
+REM Already-set variables win, so `set PORT=9000 && scripts\start-backend.bat`
+REM still works — mirrors start-backend.sh's behavior.
+if exist ".env" (
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+    if not "%%A"=="" (
+      if not defined %%A set "%%A=%%B"
+    )
+  )
+)
+
 set SRC=backend\src\main\java
 set OUT=backend\bin
 set DATA=%DATA_DIR%
@@ -52,5 +65,18 @@ if not "%DATABASE_URL%"=="" (
 set CP=%OUT%
 if exist "%PGJAR%" set CP=%OUT%;%PGJAR%
 
-echo Starting backend on http://127.0.0.1:8080
+if not "%DATABASE_URL%"=="" (
+  echo Storage: Postgres ^(DATABASE_URL is set^)
+) else (
+  echo Storage: local file
+)
+if "%LICENSE_KEY%"=="" (
+  echo License: NONE SET - writes will be blocked read-only until LICENSE_KEY is set in .env
+) else (
+  echo License: LICENSE_KEY is set
+)
+
+set SHOWPORT=%PORT%
+if "%SHOWPORT%"=="" set SHOWPORT=8080
+echo Starting backend on http://127.0.0.1:%SHOWPORT%
 java -cp "%CP%" com.reportcard.Main "%DATA%" "%PUBLIC%"
