@@ -1,0 +1,21 @@
+{
+  "name": "st-pius-devdash",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "vite build",
+    "preview": "NODE_ENV=production node server.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.18.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.2",
+    "vite": "^8.1.0"
+  }
+}
