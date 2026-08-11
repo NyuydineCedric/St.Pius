@@ -1,0 +1,15 @@
+{
+  "renderApiKey": "",
+  "schools": {
+    "LIC-EXAMPLE": {
+      "renderServiceUrl": "https://your-backend.onrender.com",
+      "renderServiceId": "srv-xxxxxxxx",
+      "adminEmail": "admin@school.example",
+      "adminPassword": "",
+      "env": {
+        "ALLOWED_ORIGIN": "https://your-frontend.vercel.app",
+        "LICENSE_SERVER_URL": "http://127.0.0.1:9000"
+      }
+    }
+  }
+}

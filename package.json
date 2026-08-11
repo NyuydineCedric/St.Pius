@@ -13,6 +13,7 @@
     "backend": "bash scripts/start-backend.sh",
     "seed:demo": "node scripts/seed-demo.mjs",
     "seed:random-marks": "node scripts/seed-random-marks.mjs",
+    "devdash": "npm --prefix devdash install && npm --prefix devdash run dev",
     "stage:backend": "node scripts/stage-backend.mjs",
     "dist": "npm run stage:backend && electron-builder"
   },

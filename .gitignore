@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+devdash/dist
 *.local
 
 # Editor directories and files
@@ -42,6 +43,9 @@ backend/src/main/java/public/
 *.ser.bak
 .env
 .env.local
+# Developer dashboard local secrets (admin passwords, Render API key)
+devdash/.schools-config.json
+
 # License signing keys — the private key must never be committed
 license-keys/
 
