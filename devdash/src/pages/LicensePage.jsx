@@ -17,6 +17,19 @@ export default function LicensePage() {
   const [issuedKey, setIssuedKey] = useState(null);
   const [form, setForm] = useState({ school: "", days: "365", plan: "pilot", renderServiceUrl: "" });
 
+  function prefillFromRow(row) {
+    setForm({
+      school: row.school,
+      days: "365",
+      plan: row.plan,
+      renderServiceUrl: row.renderServiceUrl || "",
+    });
+    setError("");
+    setSuccess("");
+    setIssuedKey(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   async function load() {
     setLoading(true);
     setError("");
@@ -193,12 +206,26 @@ export default function LicensePage() {
                   </td>
                   <td>
                     <div className="actions">
-                      <button type="button" className="btn btn-sm" onClick={() => handleCopy(row.id)}>
-                        Copy
-                      </button>
-                      <button type="button" className="btn btn-sm" onClick={() => handleRenew(row.id)}>
-                        Renew
-                      </button>
+                      {row.state !== "REVOKED" && (
+                        <button type="button" className="btn btn-sm" onClick={() => handleCopy(row.id)}>
+                          Copy
+                        </button>
+                      )}
+                      {row.state !== "REVOKED" && (
+                        <button type="button" className="btn btn-sm" onClick={() => handleRenew(row.id)}>
+                          Renew
+                        </button>
+                      )}
+                      {row.state === "REVOKED" && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          title="Pre-fill the issue form with this school's details"
+                          onClick={() => prefillFromRow(row)}
+                        >
+                          Re-issue
+                        </button>
+                      )}
                       {row.state !== "REVOKED" && (
                         <button type="button" className="btn btn-sm btn-danger" onClick={() => handleRevoke(row.id)}>
                           Revoke
