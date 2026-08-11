@@ -204,14 +204,9 @@ final class SyncClient {
         sb.append("],\"teachers\":[");
         List<Main.Teacher> teachers = store.teachersChangedSince(localCursor);
         for (int i = 0; i < teachers.size(); i++) {
-            Main.Teacher t = teachers.get(i);
             if (i > 0)
                 sb.append(',');
-            sb.append("{\"id\":").append(Json.str(t.id))
-                    .append(",\"name\":").append(Json.str(t.name))
-                    .append(",\"email\":").append(Json.str(t.email))
-                    .append(",\"phone\":").append(Json.str(t.phone))
-                    .append(",\"updatedAt\":").append(t.updatedAt).append('}');
+            sb.append(teachers.get(i).toSyncJson());
         }
         sb.append("],\"marks\":[");
         List<Main.MarkRow> marks = store.marksChangedSince(localCursor);
@@ -264,6 +259,12 @@ final class SyncClient {
             Main.Teacher teacher = new Main.Teacher(id, Json.getString(t, "name", ""),
                     Json.getString(t, "email", ""), Json.getString(t, "phone", ""));
             teacher.updatedAt = (long) Json.getDouble(t, "updatedAt", 0);
+            for (Map<String, Object> a : Json.getObjectList(t, "assignments")) {
+                String cls = Json.getString(a, "class", "");
+                String subject = Json.getString(a, "subject", "");
+                if (!cls.isBlank())
+                    teacher.assignments.add(new Main.Assignment(cls, subject));
+            }
             store.mergeTeacher(teacher);
         }
 

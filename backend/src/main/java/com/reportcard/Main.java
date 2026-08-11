@@ -1845,6 +1845,12 @@ public class Main {
                         Teacher teacher = new Teacher(id, Json.getString(t, "name", ""),
                                 Json.getString(t, "email", ""), Json.getString(t, "phone", ""));
                         teacher.updatedAt = clampToNow(Json.getDouble(t, "updatedAt", serverTime), serverTime);
+                        for (Map<String, Object> a : Json.getObjectList(t, "assignments")) {
+                            String cls = Json.getString(a, "class", "");
+                            String subject = Json.getString(a, "subject", "");
+                            if (!cls.isBlank())
+                                teacher.assignments.add(new Assignment(cls, subject));
+                        }
                         if (store.mergeTeacher(teacher))
                             appliedTeachers++;
                     }
@@ -1874,14 +1880,9 @@ public class Main {
             sb.append("],\"teachers\":[");
             List<Teacher> teachers = store.teachersChangedSince(since);
             for (int i = 0; i < teachers.size(); i++) {
-                Teacher t = teachers.get(i);
                 if (i > 0)
                     sb.append(',');
-                sb.append("{\"id\":").append(Json.str(t.id))
-                        .append(",\"name\":").append(Json.str(t.name))
-                        .append(",\"email\":").append(Json.str(t.email))
-                        .append(",\"phone\":").append(Json.str(t.phone))
-                        .append(",\"updatedAt\":").append(t.updatedAt).append('}');
+                sb.append(teachers.get(i).toSyncJson());
             }
             sb.append("],\"marks\":[");
             List<MarkRow> marks = store.marksChangedSince(since);
@@ -2271,6 +2272,21 @@ public class Main {
             return String.format(Locale.ROOT,
                     "{\"id\":\"%s\",\"name\":\"%s\",\"email\":\"%s\",\"phone\":\"%s\",\"assignments\":%s}",
                     escape(id), escape(name), escape(email), escape(phone), assignSb.toString());
+        }
+
+        /**
+         * Same shape as toJson() (assignments included) plus updatedAt, for
+         * the sync protocol — mirrors Student.toSyncJson(). Without
+         * assignments here, a teacher pushed up during sync would land on
+         * the server with no classes/subjects, and a pulled-down echo of
+         * that bare record could then wipe assignments on the other side
+         * too, since mergeTeacher replaces the whole record.
+         */
+        String toSyncJson() {
+            StringBuilder sb = new StringBuilder(toJson());
+            sb.setLength(sb.length() - 1); // drop the closing brace
+            sb.append(",\"updatedAt\":").append(updatedAt);
+            return sb.append('}').toString();
         }
 
         private String escape(String s) {
@@ -3035,6 +3051,7 @@ public class Main {
                     }
                     if (!exists) {
                         t.assignments.add(new Assignment(className, subject));
+                        t.updatedAt = System.currentTimeMillis();
                         logActivity("Staff", t.name + " assigned to " + subject + " (" + className + ")");
                     }
                     return true;
@@ -3047,7 +3064,10 @@ public class Main {
         public synchronized void removeAssignment(String teacherId, String className, String subject) {
             for (Teacher t : teachers) {
                 if (t.id.equals(teacherId)) {
-                    t.assignments.removeIf(a -> a.className.equals(className) && a.subject.equals(subject));
+                    boolean removed = t.assignments
+                            .removeIf(a -> a.className.equals(className) && a.subject.equals(subject));
+                    if (removed)
+                        t.updatedAt = System.currentTimeMillis();
                     return;
                 }
             }
@@ -4282,6 +4302,7 @@ public class Main {
                     int updated = ps.executeUpdate();
                     if (updated > 0) {
                         logActivity("Staff", teacherName + " assigned to " + subject + " (" + className + ")");
+                        touchTeacherUpdatedAt(c, teacherId);
                     }
                 }
                 return true;
@@ -4298,9 +4319,26 @@ public class Main {
                 ps.setString(1, teacherId);
                 ps.setString(2, className);
                 ps.setString(3, subject);
-                ps.executeUpdate();
+                int removed = ps.executeUpdate();
+                if (removed > 0)
+                    touchTeacherUpdatedAt(c, teacherId);
             } catch (SQLException e) {
                 System.err.println("removeAssignment failed: " + e.getMessage());
+            }
+        }
+
+        /**
+         * Bumps a teacher's updated_at so an assignment-only change (no edit
+         * to name/email/phone) still shows up in teachersChangedSince —
+         * otherwise sync would never notice a teacher was assigned or
+         * unassigned from a class/subject.
+         */
+        private void touchTeacherUpdatedAt(Connection c, String teacherId) throws SQLException {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "UPDATE teachers SET updated_at = ? WHERE id = ?")) {
+                ps.setLong(1, System.currentTimeMillis());
+                ps.setString(2, teacherId);
+                ps.executeUpdate();
             }
         }
 
@@ -4707,16 +4745,36 @@ public class Main {
         @Override
         public List<Teacher> teachersChangedSince(long since) {
             List<Teacher> out = new ArrayList<>();
-            try (Connection c = connect();
-                    PreparedStatement ps = c.prepareStatement(
-                            "SELECT id, name, email, phone, updated_at FROM teachers WHERE updated_at > ?")) {
-                ps.setLong(1, since);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        Teacher t = new Teacher(rs.getString("id"), rs.getString("name"),
-                                rs.getString("email"), rs.getString("phone"));
-                        t.updatedAt = rs.getLong("updated_at");
-                        out.add(t);
+            try (Connection c = connect()) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT id, name, email, phone, updated_at FROM teachers WHERE updated_at > ?")) {
+                    ps.setLong(1, since);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            Teacher t = new Teacher(rs.getString("id"), rs.getString("name"),
+                                    rs.getString("email"), rs.getString("phone"));
+                            t.updatedAt = rs.getLong("updated_at");
+                            out.add(t);
+                        }
+                    }
+                }
+                // Assignments have no updated_at of their own, so a teacher
+                // only shows up here via their own row changing — fine for
+                // now since assignment edits go through addAssignment/
+                // removeAssignment, which should touch the teacher's
+                // updated_at too (see those methods). Fetched per-teacher
+                // rather than joined so a teacher with zero assignments
+                // still comes back as one row, not zero.
+                for (Teacher t : out) {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "SELECT class_name, subject FROM assignments WHERE teacher_id = ?")) {
+                        ps.setString(1, t.id);
+                        try (ResultSet ars = ps.executeQuery()) {
+                            while (ars.next()) {
+                                t.assignments.add(new Assignment(ars.getString("class_name"),
+                                        ars.getString("subject")));
+                            }
+                        }
                     }
                 }
             } catch (SQLException e) {
@@ -4806,16 +4864,48 @@ public class Main {
                             return false;
                     }
                 }
-                try (PreparedStatement ps = c.prepareStatement(
-                        "INSERT INTO teachers (id, name, email, phone, updated_at) VALUES (?,?,?,?,?) "
-                                + "ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email, "
-                                + "phone=EXCLUDED.phone, updated_at=EXCLUDED.updated_at")) {
-                    ps.setString(1, incoming.id);
-                    ps.setString(2, incoming.name);
-                    ps.setString(3, incoming.email);
-                    ps.setString(4, incoming.phone);
-                    ps.setLong(5, incoming.updatedAt);
-                    ps.executeUpdate();
+                c.setAutoCommit(false);
+                try {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO teachers (id, name, email, phone, updated_at) VALUES (?,?,?,?,?) "
+                                    + "ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email, "
+                                    + "phone=EXCLUDED.phone, updated_at=EXCLUDED.updated_at")) {
+                        ps.setString(1, incoming.id);
+                        ps.setString(2, incoming.name);
+                        ps.setString(3, incoming.email);
+                        ps.setString(4, incoming.phone);
+                        ps.setLong(5, incoming.updatedAt);
+                        ps.executeUpdate();
+                    }
+                    // The incoming record is authoritative for this teacher's
+                    // whole assignment set (same "whole record wins" rule the
+                    // rest of sync uses) — replace rather than merge, so a
+                    // removed assignment on the winning side actually clears
+                    // here too instead of only ever accumulating.
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "DELETE FROM assignments WHERE teacher_id = ?")) {
+                        ps.setString(1, incoming.id);
+                        ps.executeUpdate();
+                    }
+                    if (incoming.assignments != null && !incoming.assignments.isEmpty()) {
+                        try (PreparedStatement ps = c.prepareStatement(
+                                "INSERT INTO assignments (teacher_id, class_name, subject) VALUES (?, ?, ?) "
+                                        + "ON CONFLICT DO NOTHING")) {
+                            for (Assignment a : incoming.assignments) {
+                                ps.setString(1, incoming.id);
+                                ps.setString(2, a.className);
+                                ps.setString(3, a.subject);
+                                ps.addBatch();
+                            }
+                            ps.executeBatch();
+                        }
+                    }
+                    c.commit();
+                } catch (SQLException e) {
+                    c.rollback();
+                    throw e;
+                } finally {
+                    c.setAutoCommit(true);
                 }
                 return true;
             } catch (SQLException e) {

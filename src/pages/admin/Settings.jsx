@@ -15,8 +15,6 @@ import {
   Download,
   Upload,
   Database,
-  Cloud,
-  CloudOff,
   KeyRound,
   RefreshCw,
 } from "lucide-react";
@@ -42,7 +40,6 @@ import {
   assignClassMaster,
   downloadBackup,
   restoreBackup,
-  getHealth,
   getLicense,
   activateLicense,
   changePassword,
@@ -108,17 +105,6 @@ export default function Settings() {
 
   const [classes, setClasses] = useState([]);
   const [teacherSearch, setTeacherSearch] = useState("");
-
-  // Cloud sync status — whether this instance is reading/writing the
-  // shared cloud database (so it receives marks teachers enter online) or
-  // just its own local file.
-  const [storageMode, setStorageMode] = useState(null); // "postgres" | "file" | null (unknown)
-
-  useEffect(() => {
-    getHealth()
-      .then((h) => setStorageMode(h.storage || "file"))
-      .catch(() => setStorageMode(null));
-  }, []);
 
   // Password change
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
@@ -807,47 +793,6 @@ export default function Settings() {
           </div>
         </Card>
       </div>
-
-      {/* Cloud Sync */}
-      <Card className="mt-6">
-        <CardHeader
-          title="Cloud Sync"
-          subtitle="Receive marks that teachers enter online, from anywhere"
-          action={
-            storageMode === "postgres" ? (
-              <Cloud size={18} className="text-emerald-500" />
-            ) : (
-              <CloudOff size={18} className="text-slate-300" />
-            )
-          }
-        />
-        <div className="rounded-lg border border-[#e2e8f0] px-4 py-3">
-          {storageMode === "postgres" && (
-            <p className="text-sm font-medium text-[#10b981]">
-              Cloud Sync is ON — this computer is connected to the shared
-              online database. Marks teachers enter from home or their
-              phones will show up here automatically whenever you're online.
-            </p>
-          )}
-          {storageMode === "file" && (
-            <>
-              <p className="text-sm font-medium text-slate-500">
-                Cloud Sync is OFF — this computer only stores data locally.
-              </p>
-              <p className="mt-2 text-xs text-slate-400">
-                To let teachers submit marks online and have them appear
-                here, deploy the online version (see your setup guide),
-                then open the <code>cloud-config.json</code> file next to
-                this app's data folder, paste in the database connection
-                string, and restart the app.
-              </p>
-            </>
-          )}
-          {storageMode === null && (
-            <p className="text-sm text-slate-400">Checking connection…</p>
-          )}
-        </div>
-      </Card>
 
       {/* Sync — only meaningful on a desktop install that has a server */}
       {sync?.configured && (
