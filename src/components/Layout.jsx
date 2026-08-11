@@ -480,11 +480,12 @@ export default function Layout() {
           <button
             onClick={() => setCollapsed((c) => !c)}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`absolute -right-3 top-8 hidden h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#1e3a8a] text-slate-300 shadow-md transition-colors hover:bg-[#0ea5e9] hover:text-white lg:flex ${
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={`absolute -right-3.5 top-8 hidden h-7 w-7 items-center justify-center rounded-full border-2 border-[#1e3a8a] bg-white text-[#1e3a8a] shadow-lg transition-colors hover:bg-[#0ea5e9] hover:text-white hover:border-[#0ea5e9] lg:flex ${
               focusRing || ""
             }`}
           >
-            {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+            {collapsed ? <ChevronRight size={15} strokeWidth={2.5} /> : <ChevronLeft size={15} strokeWidth={2.5} />}
           </button>
 
           {/* Logo */}

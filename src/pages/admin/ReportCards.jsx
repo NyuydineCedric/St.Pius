@@ -1094,10 +1094,10 @@ export default function ReportCards() {
                   : "Pick a class to view students."}
               </div>
             ) : (
-              // Roster list scrolls internally once it grows past ~10
-              // students, so a big class doesn't push the rest of the page
-              // (term selector, print buttons, etc.) out of view.
-              <div className="max-h-[880px] space-y-2 overflow-y-auto pr-1">
+              // Roster list grows with the page instead of scrolling on its
+              // own — a second, inner scrollbar next to the page's own was
+              // confusing. The whole page (Layout's <main>) scrolls as one.
+              <div className="space-y-2">
                 {filteredStudents.map((student) => (
                   <button
                     key={student.code || student.id}
