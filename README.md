@@ -35,9 +35,9 @@ npm run seed:demo
 
 This **replaces** students, classes, teachers, and marks with a GBHS Bamenda sample set (Sequences 1–4 filled). Login accounts:
 
-| Role | Email | Password |
-| ---- | ----- | -------- |
-| Admin | `stpius@gmail.com` | `stpius123@` |
+| Role    | Email                  | Password          |
+| ------- | ---------------------- | ----------------- |
+| Admin   | `stpius@gmail.com`     | `stpius123@`      |
 | Teacher | `teacher@gbhs-demo.cm` | `DemoTeacher123!` |
 
 Try **Report Cards → Form 4A** after seeding. Re-run anytime to reset the demo.
@@ -66,9 +66,9 @@ Output lands in `release/`.
 
 The `jre/` folder in this repo is a **Windows** jlink image (`java.exe`). Electron resolves:
 
-| Platform | Packaged binary |
-| -------- | --------------- |
-| Windows  | `resources/jre/bin/java.exe` |
+| Platform  | Packaged binary                                      |
+| --------- | ---------------------------------------------------- |
+| Windows   | `resources/jre/bin/java.exe`                         |
 | Linux/mac | `resources/jre/bin/java`, else system `java` on PATH |
 
 For offline Linux/mac installers, replace `jre/` with a matching jlink runtime before `npm run dist`.
@@ -97,22 +97,22 @@ For a separate SPA host, set `VITE_API_BASE_URL` at frontend build time and `ALL
 
 ## Environment variables
 
-| Variable | Default | Purpose |
-| -------- | ------- | ------- |
-| `PORT` | `8080` | HTTP port |
-| `BIND_HOST` | `127.0.0.1` (desktop) / `0.0.0.0` if `DATABASE_URL` or set explicitly | Listen address |
-| `DATABASE_URL` | unset | Postgres URL → `PostgresDataStore`; else file store |
-| `DATA_DIR` | `.` | Directory for `backend-data.ser` (+ `.bak`) |
-| `ALLOWED_ORIGIN` | localhost origins only | CORS allowlist for cross-origin web |
-| `VITE_API_BASE_URL` | `http://localhost:8080` (prod build) | Frontend API base when not same-origin |
-| `BOOTSTRAP_ADMIN_EMAIL` | unset | First-boot admin email. Applied **only** if no admin exists |
-| `BOOTSTRAP_ADMIN_PASSWORD` | unset | First-boot admin password (required alongside the email) |
-| `BOOTSTRAP_ADMIN_NAME` | `Admin` | Display name for the bootstrap admin |
-| `DB_POOL_SIZE` | `8` | Max pooled Postgres connections. Keep low on Supabase free tier |
-| `HTTP_THREADS` | `16` | Concurrent request handlers |
-| `LICENSE_KEY` | unset | Licence key. Falls back to `license.key` in the data dir |
-| `LICENSE_SERVER_URL` | unset | Optional revocation check. Unset = offline verification only |
-| `ALLOW_DEMO_SEED` | unset | Enables `/api/demo/seed`, which **erases all academic data** |
+| Variable                   | Default                                                               | Purpose                                                         |
+| -------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `PORT`                     | `8080`                                                                | HTTP port                                                       |
+| `BIND_HOST`                | `127.0.0.1` (desktop) / `0.0.0.0` if `DATABASE_URL` or set explicitly | Listen address                                                  |
+| `DATABASE_URL`             | unset                                                                 | Postgres URL → `PostgresDataStore`; else file store             |
+| `DATA_DIR`                 | `.`                                                                   | Directory for `backend-data.ser` (+ `.bak`)                     |
+| `ALLOWED_ORIGIN`           | localhost origins only                                                | CORS allowlist for cross-origin web                             |
+| `VITE_API_BASE_URL`        | `http://localhost:8080` (prod build)                                  | Frontend API base when not same-origin                          |
+| `BOOTSTRAP_ADMIN_EMAIL`    | unset                                                                 | First-boot admin email. Applied **only** if no admin exists     |
+| `BOOTSTRAP_ADMIN_PASSWORD` | unset                                                                 | First-boot admin password (required alongside the email)        |
+| `BOOTSTRAP_ADMIN_NAME`     | `Admin`                                                               | Display name for the bootstrap admin                            |
+| `DB_POOL_SIZE`             | `8`                                                                   | Max pooled Postgres connections. Keep low on Supabase free tier |
+| `HTTP_THREADS`             | `16`                                                                  | Concurrent request handlers                                     |
+| `LICENSE_KEY`              | unset                                                                 | Licence key. Falls back to `license.key` in the data dir        |
+| `LICENSE_SERVER_URL`       | unset                                                                 | Optional revocation check. Unset = offline verification only    |
+| `ALLOW_DEMO_SEED`          | unset                                                                 | Enables `/api/demo/seed`, which **erases all academic data**    |
 
 > Leave the `BOOTSTRAP_ADMIN_*` vars unset for a school deployment — the first
 > account registered through the UI becomes the admin. They exist for automated
@@ -152,11 +152,11 @@ node scripts/license.mjs inspect <key>   # decode any key
 
 Everything lives in `license-keys/` (gitignored):
 
-| File | What it is |
-| ---- | ---------- |
+| File                  | What it is                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `license-private.pem` | Signing key. **Back this up.** Lose it and you can never issue another licence that existing installs accept |
-| `license-public.pem` | Public half, compiled into `License.java` |
-| `issued.json` | Ledger of every licence handed out — who, when, expiry, revoked |
+| `license-public.pem`  | Public half, compiled into `License.java`                                                                    |
+| `issued.json`         | Ledger of every licence handed out — who, when, expiry, revoked                                              |
 
 The ledger is bookkeeping only; licences are self-contained and verify without
 it. It exists so you can answer "who has what, and when does it lapse?".
@@ -179,7 +179,7 @@ school that lapses mid-term can still get at — and export — its own records.
 Withholding a school's data is never the lever.
 
 If `LICENSE_SERVER_URL` is set, licences are also checked for revocation. That
-check fails *open*: an unreachable server leaves the licence alone, since "we
+check fails _open_: an unreachable server leaves the licence alone, since "we
 couldn't ask" must not mean "denied".
 
 ## Offline-first sync (desktop)
@@ -237,16 +237,16 @@ shipping-readiness.md  Gate checklist
 
 ## Scripts
 
-| Command | What it does |
-| ------- | ------------ |
-| `npm run dev` | Vite frontend |
-| `npm run build` | Production frontend → `dist/` |
-| `npm run electron` | Launch Electron (expects staged backend) |
-| `npm run dist` | electron-builder package |
-| `npm run backend` | Compile + run Java API |
-| `npm run seed:demo` | Load GBHS Bamenda demo students/marks (backend must be up) |
-| `./scripts/start-backend.sh` | Same as `npm run backend` |
-| `./scripts/stage-backend.sh` | Build UI into staging for Electron |
+| Command                      | What it does                                               |
+| ---------------------------- | ---------------------------------------------------------- |
+| `npm run dev`                | Vite frontend                                              |
+| `npm run build`              | Production frontend → `dist/`                              |
+| `npm run electron`           | Launch Electron (expects staged backend)                   |
+| `npm run dist`               | electron-builder package                                   |
+| `npm run backend`            | Compile + run Java API                                     |
+| `npm run seed:demo`          | Load GBHS Bamenda demo students/marks (backend must be up) |
+| `./scripts/start-backend.sh` | Same as `npm run backend`                                  |
+| `./scripts/stage-backend.sh` | Build UI into staging for Electron                         |
 
 ---
 
@@ -261,7 +261,9 @@ shipping-readiness.md  Gate checklist
 Created **only** by `npm run seed:demo` (or a `BOOTSTRAP_ADMIN_*` bootstrap on an
 empty store) — never seeded automatically into a real deployment.
 
- Admin    stpius@gmail.com  /  stpius123@
- Teacher  teacher@gbhs-demo.cm  /  DemoTeacher123!
+Admin stpius@gmail.com / stpius123@
+Teacher teacher@gbhs-demo.cm / DemoTeacher123!
 
 **Do not ship a build to a school with these accounts present.**
+
+undo licence key
