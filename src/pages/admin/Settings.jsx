@@ -17,6 +17,8 @@ import {
   Database,
   KeyRound,
   RefreshCw,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import {
   Card,
@@ -33,6 +35,7 @@ import {
   saveSettings,
   getTeachers,
   addTeacher,
+  updateTeacher,
   addTeacherAssignment,
   removeTeacherAssignment,
   deleteTeacher,
@@ -102,6 +105,11 @@ export default function Settings() {
   });
   const [savingTeacher, setSavingTeacher] = useState(false);
   const [assignDraft, setAssignDraft] = useState({}); // { [teacherId]: { class, subject } }
+
+  // Inline editing of a teacher from the Users & Roles card.
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: "", email: "", phone: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const [classes, setClasses] = useState([]);
   const [teacherSearch, setTeacherSearch] = useState("");
@@ -292,7 +300,9 @@ export default function Settings() {
     setStampError("");
     setStampLoading(true);
     try {
-      const dataUrl = await fileToCompressedDataUrl(file, { maxDimension: 300 });
+      const dataUrl = await fileToCompressedDataUrl(file, {
+        maxDimension: 300,
+      });
       setPrincipalStamp(dataUrl);
       await saveSettings({ principalStamp: dataUrl });
       flashSaved("Stamp saved.");
@@ -310,7 +320,9 @@ export default function Settings() {
     setSignatureError("");
     setSignatureLoading(true);
     try {
-      const dataUrl = await fileToCompressedDataUrl(file, { maxDimension: 300 });
+      const dataUrl = await fileToCompressedDataUrl(file, {
+        maxDimension: 300,
+      });
       setPrincipalSignature(dataUrl);
       await saveSettings({ principalSignature: dataUrl });
       flashSaved("Signature saved.");
@@ -358,6 +370,61 @@ export default function Settings() {
       setError(err.message);
     } finally {
       setSavingTeacher(false);
+    }
+  }
+
+  function startEditTeacher(teacher) {
+    setError("");
+    setEditingId(teacher.id);
+    setEditForm({
+      name: teacher.name || "",
+      email: teacher.email && teacher.email !== "—" ? teacher.email : "",
+      phone: teacher.phone && teacher.phone !== "—" ? teacher.phone : "",
+    });
+  }
+
+  function cancelEditTeacher() {
+    setEditingId(null);
+    setEditForm({ name: "", email: "", phone: "" });
+  }
+
+  async function handleSaveTeacherEdit() {
+    if (!editingId) return;
+    if (!editForm.name.trim()) {
+      setError("A teacher's name can't be empty.");
+      return;
+    }
+    setSavingEdit(true);
+    setError("");
+    try {
+      const updated = await updateTeacher(editingId, {
+        name: editForm.name.trim(),
+        email: editForm.email.trim() || "—",
+        phone: editForm.phone.trim() || "—",
+      });
+      setTeachers((prev) =>
+        prev.map((t) =>
+          t.id === editingId
+            ? {
+                ...t,
+                ...updated,
+                assignments: updated.assignments ?? t.assignments,
+              }
+            : t,
+        ),
+      );
+      // Class masters display the teacher's name, so keep them in step.
+      setClasses((prev) =>
+        prev.map((c) =>
+          c.classMasterId === editingId ? { ...c, teacher: updated.name } : c,
+        ),
+      );
+      cancelEditTeacher();
+      flashSaved("Teacher updated.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -419,6 +486,11 @@ export default function Settings() {
   }
 
   async function handleDeleteTeacher(teacherId) {
+    const teacher = teachers.find((t) => t.id === teacherId);
+    const confirmed = window.confirm(
+      `Delete ${teacher ? teacher.name : "this teacher"}? This also removes their login account and class/subject assignments. This cannot be undone.`,
+    );
+    if (!confirmed) return;
     try {
       await deleteTeacher(teacherId);
       setTeachers((prev) => prev.filter((t) => t.id !== teacherId));
@@ -429,6 +501,8 @@ export default function Settings() {
             : c,
         ),
       );
+      if (editingId === teacherId) cancelEditTeacher();
+      flashSaved("Teacher deleted.");
     } catch (err) {
       setError(err.message);
     }
@@ -447,8 +521,18 @@ export default function Settings() {
   }
 
   const usersList = [
-    { name: "Admin User", email: "admin@sch.edu", role: "Administrator" },
-    ...teachers.map((t) => ({ name: t.name, email: t.email, role: "Teacher" })),
+    {
+      id: "admin",
+      name: "Admin User",
+      email: "admin@sch.edu",
+      role: "Administrator",
+    },
+    ...teachers.map((t) => ({
+      id: t.id,
+      name: t.name,
+      email: t.email,
+      role: "Teacher",
+    })),
   ];
 
   return (
@@ -628,8 +712,8 @@ export default function Settings() {
                 }
               />
               <p className="mt-1 text-xs text-slate-400">
-                Printed on report cards as "Next Term: …" once the current
-                term is closed.
+                Printed on report cards as "Next Term: …" once the current term
+                is closed.
               </p>
             </div>
             <Button
@@ -748,9 +832,7 @@ export default function Settings() {
                 </div>
               </div>
               {signatureError && (
-                <p className="mt-1.5 text-xs text-rose-500">
-                  {signatureError}
-                </p>
+                <p className="mt-1.5 text-xs text-rose-500">{signatureError}</p>
               )}
             </div>
           </div>
@@ -763,28 +845,134 @@ export default function Settings() {
             subtitle="People with access to this system"
             action={<UserCog size={18} className="text-slate-300" />}
           />
-          <div className="flex flex-col gap-2">
-            {usersList.map((u) => (
-              <div
-                key={u.email + u.name}
-                className="flex items-center justify-between rounded-lg border border-[#e2e8f0] px-4 py-3 transition-colors hover:bg-[#f1f5f9]/60"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1e3a8a] font-mono text-xs font-semibold text-[#0ea5e9]">
-                    {initials(u.name)}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-[#1e3a8a]">
-                      {u.name}
+          <div className="flex max-h-[480px] flex-col gap-2 overflow-y-auto pr-1">
+            {usersList.map((u) => {
+              const isTeacher = u.role === "Teacher";
+              const isEditing = isTeacher && editingId === u.id;
+
+              if (isEditing) {
+                return (
+                  <div
+                    key={u.id}
+                    className="rounded-lg border border-[#0ea5e9] bg-[#0ea5e9]/5 p-4"
+                  >
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div>
+                        <Label htmlFor={`editName-${u.id}`}>Full Name</Label>
+                        <Input
+                          id={`editName-${u.id}`}
+                          value={editForm.name}
+                          onChange={(e) =>
+                            setEditForm((f) => ({ ...f, name: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor={`editEmail-${u.id}`}>Email</Label>
+                        <Input
+                          id={`editEmail-${u.id}`}
+                          type="email"
+                          value={editForm.email}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              email: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor={`editPhone-${u.id}`}>Phone</Label>
+                        <Input
+                          id={`editPhone-${u.id}`}
+                          type="tel"
+                          value={editForm.phone}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              phone: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-400">{u.email}</div>
+                    <p className="mt-2 text-xs text-slate-400">
+                      If you change the email, the teacher must sign in with the
+                      new one from now on.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        icon={Save}
+                        onClick={handleSaveTeacherEdit}
+                        disabled={savingEdit || !editForm.name.trim()}
+                      >
+                        {savingEdit ? "Saving…" : "Save"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        icon={X}
+                        onClick={cancelEditTeacher}
+                        disabled={savingEdit}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={u.id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-[#e2e8f0] px-4 py-3 transition-colors hover:bg-[#f1f5f9]/60"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[#1e3a8a] font-mono text-xs font-semibold text-[#0ea5e9]">
+                      {initials(u.name)}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-[#1e3a8a]">
+                        {u.name}
+                      </div>
+                      <div className="truncate text-xs text-slate-400">
+                        {u.email}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-2">
+                    <Badge tone={u.role === "Administrator" ? "navy" : "sky"}>
+                      {u.role}
+                    </Badge>
+                    {isTeacher && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            startEditTeacher(
+                              teachers.find((t) => t.id === u.id),
+                            )
+                          }
+                          className="rounded-md p-1.5 text-slate-400 hover:bg-sky-50 hover:text-[#0b61a6]"
+                          aria-label={`Edit ${u.name}`}
+                          title="Edit"
+                        >
+                          <Pencil size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTeacher(u.id)}
+                          className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
+                          aria-label={`Delete ${u.name}`}
+                          title="Delete"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-                <Badge tone={u.role === "Administrator" ? "navy" : "sky"}>
-                  {u.role}
-                </Badge>
-              </div>
-            ))}
+              );
+            })}
             {usersList.length === 1 && (
               <p className="py-4 text-center text-xs text-slate-400">
                 Add teachers below to see them listed here.
@@ -983,8 +1171,8 @@ export default function Settings() {
               </div>
               <p className="text-xs text-slate-400">
                 Saves every student, class, mark, and staff record to a file.
-                Keep it somewhere safe — a USB drive, cloud folder, or email
-                to yourself.
+                Keep it somewhere safe — a USB drive, cloud folder, or email to
+                yourself.
               </p>
             </div>
             <Button
@@ -1002,8 +1190,8 @@ export default function Settings() {
                 Restore from a backup
               </div>
               <p className="text-xs text-slate-400">
-                Replaces all current data with a previously downloaded
-                backup file. Use this only if you need to recover lost data.
+                Replaces all current data with a previously downloaded backup
+                file. Use this only if you need to recover lost data.
               </p>
             </div>
             <Button
@@ -1118,7 +1306,7 @@ export default function Settings() {
             No teachers match “{teacherSearch.trim()}”.
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex max-h-[600px] flex-col gap-4 overflow-y-auto pr-1">
             {filteredTeachers.map((t) => {
               const draft = assignDraft[t.id] || { class: "", subject: "" };
               return (
@@ -1231,7 +1419,7 @@ export default function Settings() {
             No classes found yet.
           </p>
         ) : (
-          <div className="flex flex-col gap-2">
+          <div className="flex max-h-[480px] flex-col gap-2 overflow-y-auto pr-1">
             {classes.map((c) => (
               <div
                 key={c.name}

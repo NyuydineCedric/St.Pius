@@ -1,28 +1,36 @@
+const s = (name, coefficient) => ({ name, coefficient });
+
+// ---------------------------------------------------------------------------
+// Form 4 / Form 5 master lists (stream logic works from these)
+// ---------------------------------------------------------------------------
 export const GENERAL_SUBJECTS = [
-  { name: "English Language", coefficient: 5 },
-  { name: "French Language", coefficient: 5 },
-  { name: "Citizenship", coefficient: 3 },
-  { name: "Sports", coefficient: 1 },
+  s("English Language", 5),
+  s("French Language", 5),
+  s("Citizenship", 5),
+  s("Religious Studies", 5),
+  s("Sports", 2),
 ];
 
 export const SCIENCE_SUBJECTS = [
-  { name: "Mathematics", coefficient: 5 },
-  { name: "Physics", coefficient: 3 },
-  { name: "Chemistry", coefficient: 3 },
-  { name: "Biology", coefficient: 3 },
-  { name: "Computer Science", coefficient: 3 },
+  s("Mathematics", 5),
+  s("Physics", 5),
+  s("Chemistry", 5),
+  s("Biology", 5),
+  s("Computer Science", 5),
 ];
 
 export const ARTS_SUBJECTS = [
-  { name: "Literature in English", coefficient: 3 },
-  { name: "History", coefficient: 3 },
-  { name: "Geography", coefficient: 3 },
+  s("Literature in English", 5),
+  s("History", 5),
+  s("Geography", 5),
+  s("Economics", 5),
+  s("Accounting", 5),
+  s("Logic", 5),
 ];
 
 export const ELECTIVE_SUBJECTS = [
-  { name: "Manual Labour", coefficient: 1 },
-  { name: "Food and Nutrition", coefficient: 3 },
-  { name: "Sound and Word Building", coefficient: 3 },
+  s("Manual Labour", 2),
+  s("Food and Nutrition", 5),
 ];
 
 export const ALL_SUBJECTS = [
@@ -32,9 +40,66 @@ export const ALL_SUBJECTS = [
   ...ELECTIVE_SUBJECTS,
 ];
 
+// ---------------------------------------------------------------------------
+// Form 1 & 2: everyone studies everything
+// ---------------------------------------------------------------------------
+export const FORM_1_2_SUBJECTS = [
+  s("English Language", 4),
+  s("Mathematics", 4),
+  s("French Language", 4),
+  s("Geography", 2),
+  s("History", 2),
+  s("Citizenship", 2),
+  s("Religious Studies", 2),
+  s("Food and Nutrition", 2),
+  s("Literature in English", 2),
+  s("Biology", 2),
+  s("Chemistry", 2),
+  s("Physics", 2),
+  s("Computer Science", 2),
+  s("Sports", 2),
+  s("Manual Labour", 2),
+];
+
+// ---------------------------------------------------------------------------
+// Form 3: everyone studies everything
+// ---------------------------------------------------------------------------
+export const FORM_3_SUBJECTS = [
+  ...FORM_1_2_SUBJECTS,
+  s("Accounting", 2),
+  s("Logic", 2),
+  s("Economics", 2),
+];
+
+// ---------------------------------------------------------------------------
+// Lower / Upper Sixth: students pick from their stream's list
+// ---------------------------------------------------------------------------
+export const SIXTH_FORM_ARTS_SUBJECTS = [
+  s("Geography", 5),
+  s("History", 5),
+  s("Economics", 5),
+  s("Literature in English", 5),
+  s("Philosophy", 5),
+  s("Religious Studies", 5),
+  s("Maths Statistics", 5),
+  s("ICT", 5),
+  s("Sports", 2),
+  s("Manual Labour", 2),
+];
+
+export const SIXTH_FORM_SCIENCE_SUBJECTS = [
+  s("Chemistry", 5),
+  s("Physics", 5),
+  s("Maths Mechanics", 5),
+  s("Computer Science", 5),
+  s("Religious Studies", 5),
+  s("Biology", 5),
+  s("Sports", 2),
+];
+
 const MATHEMATICS = SCIENCE_SUBJECTS.find((s) => s.name === "Mathematics");
-const CHEMISTRY = SCIENCE_SUBJECTS.find((s) => s.name === "Chemistry");
-const HISTORY = ARTS_SUBJECTS.find((s) => s.name === "History");
+const CHEMISTRY = SIXTH_FORM_SCIENCE_SUBJECTS.find((s) => s.name === "Chemistry");
+const HISTORY = SIXTH_FORM_ARTS_SUBJECTS.find((s) => s.name === "History");
 
 /** Curriculum levels (no section letter). */
 export const CLASS_LEVELS = [
@@ -153,7 +218,8 @@ export function compareClassNames(a, b) {
 
 // The compulsory ("locked in") subjects for a class + stream, before any
 // student-chosen extras are added on top.
-//  - Forms 1-3: everyone studies everything, no streaming.
+//  - Forms 1-3: everyone studies everything, no streaming (Form 1/2 and
+//    Form 3 each have their own list and coefficients).
 //  - Form 4/5: general subjects + full stream core, and Mathematics is
 //    compulsory for EVERYONE here regardless of stream (Science already
 //    includes it; Arts gets it added on top of its own core).
@@ -161,7 +227,12 @@ export function compareClassNames(a, b) {
 //    Chemistry for Science, History for Arts. Everything else is chosen
 //    freely from that stream's pool, up to the 5-subject cap.
 export function getCoreSubjects(className, option) {
-  if (!requiresStream(className)) return ALL_SUBJECTS;
+  if (!requiresStream(className)) {
+    // CHANGED: Form 3 has its own list; Form 1 and 2 share one.
+    return getClassLevel(className) === "Form 3"
+      ? FORM_3_SUBJECTS
+      : FORM_1_2_SUBJECTS;
+  }
 
   if (isSixthForm(className)) {
     if (option === "Science") return [CHEMISTRY];
@@ -180,20 +251,16 @@ export function getCoreSubjects(className, option) {
 }
 
 // The pool a Lower/Upper Sixth student can freely choose additional
-// subjects from (their stream's remaining subjects, plus electives),
-// excluding whichever subject is already the compulsory anchor.
+// subjects from (their stream's remaining subjects), excluding whichever
+// subject is already the compulsory anchor.
 export function getSixthFormElectivePool(option) {
   if (option === "Science") {
-    return [
-      ...SCIENCE_SUBJECTS.filter((s) => s.name !== "Chemistry"),
-      ...ELECTIVE_SUBJECTS,
-    ];
+    // CHANGED: uses the sixth-form science list
+    return SIXTH_FORM_SCIENCE_SUBJECTS.filter((s) => s.name !== "Chemistry");
   }
   if (option === "Arts") {
-    return [
-      ...ARTS_SUBJECTS.filter((s) => s.name !== "History"),
-      ...ELECTIVE_SUBJECTS,
-    ];
+    // CHANGED: uses the sixth-form arts list
+    return SIXTH_FORM_ARTS_SUBJECTS.filter((s) => s.name !== "History");
   }
   return [];
 }

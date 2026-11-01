@@ -1030,7 +1030,7 @@ export default function ReportCards() {
               title="Classes"
               subtitle="Pick a class to explore report cards."
             />
-            <div className="space-y-2">
+            <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
               {classes.map((name) => (
                 <button
                   key={name}
@@ -1097,7 +1097,7 @@ export default function ReportCards() {
               // Roster list grows with the page instead of scrolling on its
               // own — a second, inner scrollbar next to the page's own was
               // confusing. The whole page (Layout's <main>) scrolls as one.
-              <div className="space-y-2">
+              <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1">
                 {filteredStudents.map((student) => (
                   <button
                     key={student.code || student.id}

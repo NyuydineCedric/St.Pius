@@ -251,6 +251,10 @@ export function deleteTeacher(teacherId) {
   return deleteJson(`/api/teachers/${encodeURIComponent(teacherId)}`);
 }
 
+export function updateTeacher(teacherId, fields) {
+  return putJson(`/api/teachers/${encodeURIComponent(teacherId)}`, fields);
+}
+
 export function getSettings() {
   return getJson("/api/settings");
 }

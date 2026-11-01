@@ -94,9 +94,7 @@ export default function StudentEntry() {
       .catch((err) => setError(err.message));
     getClasses()
       .then((data) => {
-        const names = data
-          .map((c) => c.name)
-          .sort(compareClassNames);
+        const names = data.map((c) => c.name).sort(compareClassNames);
         // Prefer configured classes; fall back to bare levels only if none yet.
         const list = names.length > 0 ? names : [...CLASS_LEVELS];
         setClasses(list);
@@ -182,15 +180,21 @@ export default function StudentEntry() {
       dob: student.dob && student.dob !== "—" ? student.dob : "",
       gender: student.gender || "Male",
       class: student.class || classes[0] || "Form 1",
-      guardian: student.guardian && student.guardian !== "—" ? student.guardian : "",
+      guardian:
+        student.guardian && student.guardian !== "—" ? student.guardian : "",
       phone: student.phone && student.phone !== "—" ? student.phone : "",
       option: student.option || "",
       electives: student.electives
-        ? student.electives.split(",").map((s) => s.trim()).filter(Boolean)
+        ? student.electives
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
         : [],
       photo: student.photo || "",
       admittedOn:
-        student.admittedOn && student.admittedOn !== "—" ? student.admittedOn : "",
+        student.admittedOn && student.admittedOn !== "—"
+          ? student.admittedOn
+          : "",
     });
     // The page's only scroll container is <main> in Layout.jsx, not the
     // window — window.scrollTo is a no-op there. scrollIntoView finds
@@ -411,268 +415,268 @@ export default function StudentEntry() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[380px_1fr]">
         {/* New student form */}
         <div ref={formCardRef}>
-        <Card>
-          <CardHeader
-            title={editingId ? "Edit Student" : "Add New Student"}
-            subtitle={
-              editingId
-                ? `Updating ${editingId}. Save to apply changes.`
-                : "Fill in the details below to enroll a student."
-            }
-          />
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div>
-              <Label>Photo</Label>
-              <div className="flex items-center gap-4">
-                <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
-                  <AuthImage
-                    src={form.photo}
-                    alt="Student preview"
-                    className="h-full w-full object-cover"
-                    fallback={<User size={28} className="text-slate-300" />}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    icon={Camera}
-                    onClick={triggerPhotoPicker}
-                    disabled={photoLoading}
-                  >
-                    {photoLoading
-                      ? "Processing…"
-                      : form.photo
-                        ? "Change photo"
-                        : "Upload photo"}
-                  </Button>
-                  {form.photo && (
-                    <button
-                      type="button"
-                      onClick={removePhoto}
-                      className="text-left text-xs font-medium text-slate-400 hover:text-rose-500"
-                    >
-                      Remove photo
-                    </button>
-                  )}
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handlePhotoSelected}
-                  />
-                </div>
-              </div>
-              {photoError && (
-                <p className="mt-1.5 text-xs text-rose-500">{photoError}</p>
-              )}
-            </div>
-
-            <div>
-              <Label htmlFor="name">Full Name</Label>
-              <Input
-                id="name"
-                required
-                placeholder="e.g. Ama Nkeng"
-                value={form.name}
-                onChange={(e) => update("name", e.target.value)}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Card>
+            <CardHeader
+              title={editingId ? "Edit Student" : "Add New Student"}
+              subtitle={
+                editingId
+                  ? `Updating ${editingId}. Save to apply changes.`
+                  : "Fill in the details below to enroll a student."
+              }
+            />
+            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div>
-                <Label htmlFor="dob">Date of Birth</Label>
+                <Label>Photo</Label>
+                <div className="flex items-center gap-4">
+                  <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
+                    <AuthImage
+                      src={form.photo}
+                      alt="Student preview"
+                      className="h-full w-full object-cover"
+                      fallback={<User size={28} className="text-slate-300" />}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      icon={Camera}
+                      onClick={triggerPhotoPicker}
+                      disabled={photoLoading}
+                    >
+                      {photoLoading
+                        ? "Processing…"
+                        : form.photo
+                          ? "Change photo"
+                          : "Upload photo"}
+                    </Button>
+                    {form.photo && (
+                      <button
+                        type="button"
+                        onClick={removePhoto}
+                        className="text-left text-xs font-medium text-slate-400 hover:text-rose-500"
+                      >
+                        Remove photo
+                      </button>
+                    )}
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handlePhotoSelected}
+                    />
+                  </div>
+                </div>
+                {photoError && (
+                  <p className="mt-1.5 text-xs text-rose-500">{photoError}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="name">Full Name</Label>
                 <Input
-                  id="dob"
-                  type="date"
-                  value={form.dob}
-                  onChange={(e) => update("dob", e.target.value)}
+                  id="name"
+                  required
+                  placeholder="e.g. Ama Nkeng"
+                  value={form.name}
+                  onChange={(e) => update("name", e.target.value)}
                 />
               </div>
-              <div>
-                <Label htmlFor="gender">Gender</Label>
-                <Select
-                  id="gender"
-                  value={form.gender}
-                  onChange={(e) => update("gender", e.target.value)}
-                >
-                  <option>Male</option>
-                  <option>Female</option>
-                </Select>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="dob">Date of Birth</Label>
+                  <Input
+                    id="dob"
+                    type="date"
+                    value={form.dob}
+                    onChange={(e) => update("dob", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="gender">Gender</Label>
+                  <Select
+                    id="gender"
+                    value={form.gender}
+                    onChange={(e) => update("gender", e.target.value)}
+                  >
+                    <option>Male</option>
+                    <option>Female</option>
+                  </Select>
+                </div>
               </div>
-            </div>
 
-            <div>
-              <Label htmlFor="class">Class</Label>
-              <Select
-                id="class"
-                value={form.class}
-                onChange={(e) => {
-                  update("class", e.target.value);
-                  update("option", "");
-                  update("electives", []);
-                }}
-              >
-                {classes.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="admittedOn">Admission Date</Label>
-              <Input
-                id="admittedOn"
-                type="date"
-                value={form.admittedOn}
-                onChange={(e) => update("admittedOn", e.target.value)}
-              />
-            </div>
-
-            {streamRequired && (
               <div>
-                <Label htmlFor="option">Option (Science / Arts)</Label>
+                <Label htmlFor="class">Class</Label>
                 <Select
-                  id="option"
-                  value={form.option}
+                  id="class"
+                  value={form.class}
                   onChange={(e) => {
-                    update("option", e.target.value);
+                    update("class", e.target.value);
+                    update("option", "");
                     update("electives", []);
                   }}
                 >
-                  <option value="">-- Select an option --</option>
-                  <option value="Science">Science</option>
-                  <option value="Arts">Arts</option>
+                  {classes.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
                 </Select>
               </div>
-            )}
 
-            {/* Form 4 / Form 5: fixed core, plus optional bonus subjects */}
-            {streamRequired && !sixthForm && form.option && (
-              <>
-                <div className="rounded-lg border border-dashed border-[#e2e8f0] bg-[#f8fafc] p-3 text-xs text-slate-500">
-                  <span className="font-semibold text-slate-600">
-                    Compulsory subjects ({form.option}):
-                  </span>{" "}
-                  {coreSubjects.map((s) => s.name).join(", ")}
-                </div>
+              <div>
+                <Label htmlFor="admittedOn">Admission Date</Label>
+                <Input
+                  id="admittedOn"
+                  type="date"
+                  value={form.admittedOn}
+                  onChange={(e) => update("admittedOn", e.target.value)}
+                />
+              </div>
 
+              {streamRequired && (
                 <div>
-                  <Label>Optional Subjects (choose any extra)</Label>
-                  <div className="flex flex-col gap-1.5 rounded-lg border border-[#e2e8f0] p-3">
-                    {ELECTIVE_SUBJECTS.map((subject) => (
-                      <label
-                        key={subject.name}
-                        className="flex items-center gap-2 text-sm text-slate-600"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={form.electives.includes(subject.name)}
-                          onChange={() => toggleElective(subject.name)}
-                        />
-                        {subject.name}
-                      </label>
-                    ))}
+                  <Label htmlFor="option">Option (Science / Arts)</Label>
+                  <Select
+                    id="option"
+                    value={form.option}
+                    onChange={(e) => {
+                      update("option", e.target.value);
+                      update("electives", []);
+                    }}
+                  >
+                    <option value="">-- Select an option --</option>
+                    <option value="Science">Science</option>
+                    <option value="Arts">Arts</option>
+                  </Select>
+                </div>
+              )}
+
+              {/* Form 4 / Form 5: fixed core, plus optional bonus subjects */}
+              {streamRequired && !sixthForm && form.option && (
+                <>
+                  <div className="rounded-lg border border-dashed border-[#e2e8f0] bg-[#f8fafc] p-3 text-xs text-slate-500">
+                    <span className="font-semibold text-slate-600">
+                      Compulsory subjects ({form.option}):
+                    </span>{" "}
+                    {coreSubjects.map((s) => s.name).join(", ")}
                   </div>
-                </div>
-              </>
-            )}
 
-            {/* Lower / Upper Sixth: one compulsory anchor + free choice, capped at 5 total */}
-            {sixthForm && form.option && (
-              <>
-                <div className="rounded-lg border border-dashed border-[#e2e8f0] bg-[#f8fafc] p-3 text-xs text-slate-500">
-                  <span className="font-semibold text-slate-600">
-                    Compulsory subject ({form.option}):
-                  </span>{" "}
-                  {form.option === "Science" ? "Chemistry" : "History"}
-                </div>
-
-                <div>
-                  <Label>
-                    Choose Subjects ({form.electives.length + 1} /{" "}
-                    {SIXTH_FORM_MAX_SUBJECTS})
-                  </Label>
-                  <div className="flex flex-col gap-1.5 rounded-lg border border-[#e2e8f0] p-3">
-                    {sixthFormPool.map((subject) => {
-                      const checked = form.electives.includes(subject.name);
-                      const disabled = !checked && sixthFormAtLimit;
-                      return (
+                  <div>
+                    <Label>Optional Subjects (choose any extra)</Label>
+                    <div className="flex flex-col gap-1.5 rounded-lg border border-[#e2e8f0] p-3">
+                      {ELECTIVE_SUBJECTS.map((subject) => (
                         <label
                           key={subject.name}
-                          className={`flex items-center gap-2 text-sm ${
-                            disabled ? "text-slate-300" : "text-slate-600"
-                          }`}
+                          className="flex items-center gap-2 text-sm text-slate-600"
                         >
                           <input
                             type="checkbox"
-                            checked={checked}
-                            disabled={disabled}
+                            checked={form.electives.includes(subject.name)}
                             onChange={() => toggleElective(subject.name)}
                           />
                           {subject.name}
                         </label>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
-                  {sixthFormAtLimit && (
-                    <p className="mt-1 text-xs text-amber-600">
-                      Maximum of {SIXTH_FORM_MAX_SUBJECTS} subjects reached.
-                    </p>
-                  )}
-                </div>
-              </>
-            )}
-
-            <div>
-              <Label htmlFor="guardian">Guardian Name</Label>
-              <Input
-                id="guardian"
-                placeholder="e.g. Mr. Nkeng Paul"
-                value={form.guardian}
-                onChange={(e) => update("guardian", e.target.value)}
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="phone">Guardian Phone</Label>
-              <Input
-                id="phone"
-                type="tel"
-                placeholder="+237 6•• ••• •••"
-                value={form.phone}
-                onChange={(e) => update("phone", e.target.value)}
-              />
-            </div>
-
-            <div className="mt-2 flex flex-col gap-2">
-              <Button
-                type="submit"
-                icon={UserPlus}
-                className="w-full"
-                disabled={saving}
-              >
-                {saving
-                  ? "Saving…"
-                  : editingId
-                    ? "Update Student"
-                    : "Save Student"}
-              </Button>
-              {editingId && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => resetForm()}
-                >
-                  Cancel edit
-                </Button>
+                </>
               )}
-            </div>
-            {error && <p className="text-sm text-rose-500">{error}</p>}
-          </form>
-        </Card>
+
+              {/* Lower / Upper Sixth: one compulsory anchor + free choice, capped at 5 total */}
+              {sixthForm && form.option && (
+                <>
+                  <div className="rounded-lg border border-dashed border-[#e2e8f0] bg-[#f8fafc] p-3 text-xs text-slate-500">
+                    <span className="font-semibold text-slate-600">
+                      Compulsory subject ({form.option}):
+                    </span>{" "}
+                    {form.option === "Science" ? "Chemistry" : "History"}
+                  </div>
+
+                  <div>
+                    <Label>
+                      Choose Subjects ({form.electives.length + 1} /{" "}
+                      {SIXTH_FORM_MAX_SUBJECTS})
+                    </Label>
+                    <div className="flex flex-col gap-1.5 rounded-lg border border-[#e2e8f0] p-3">
+                      {sixthFormPool.map((subject) => {
+                        const checked = form.electives.includes(subject.name);
+                        const disabled = !checked && sixthFormAtLimit;
+                        return (
+                          <label
+                            key={subject.name}
+                            className={`flex items-center gap-2 text-sm ${
+                              disabled ? "text-slate-300" : "text-slate-600"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => toggleElective(subject.name)}
+                            />
+                            {subject.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {sixthFormAtLimit && (
+                      <p className="mt-1 text-xs text-amber-600">
+                        Maximum of {SIXTH_FORM_MAX_SUBJECTS} subjects reached.
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <div>
+                <Label htmlFor="guardian">Guardian Name</Label>
+                <Input
+                  id="guardian"
+                  placeholder="e.g. Mr. Nkeng Paul"
+                  value={form.guardian}
+                  onChange={(e) => update("guardian", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="phone">Guardian Phone</Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="+237 6•• ••• •••"
+                  value={form.phone}
+                  onChange={(e) => update("phone", e.target.value)}
+                />
+              </div>
+
+              <div className="mt-2 flex flex-col gap-2">
+                <Button
+                  type="submit"
+                  icon={UserPlus}
+                  className="w-full"
+                  disabled={saving}
+                >
+                  {saving
+                    ? "Saving…"
+                    : editingId
+                      ? "Update Student"
+                      : "Save Student"}
+                </Button>
+                {editingId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => resetForm()}
+                  >
+                    Cancel edit
+                  </Button>
+                )}
+              </div>
+              {error && <p className="text-sm text-rose-500">{error}</p>}
+            </form>
+          </Card>
         </div>
 
         {/* Student list */}
@@ -708,73 +712,79 @@ export default function StudentEntry() {
               No students match “{search.trim()}”.
             </div>
           ) : (
-            <Table
-              columns={[
-                "Student ID",
-                "Name",
-                "Class",
-                "Option",
-                "Gender",
-                "Guardian",
-                "Phone",
-                "Status",
-                "",
-              ]}
-            >
-              {filteredStudents.map((s) => (
-                <tr
-                  key={s.code || s.id}
-                  className="transition-colors hover:bg-[#f1f5f9]/60"
-                >
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                    {s.code || s.id}
-                  </td>
-                  <td className="px-4 py-3 font-medium text-[#1e3a8a]">
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#e2e8f0] bg-[#f1f5f9]">
-                        <AuthImage
-                          src={s.photo}
-                          alt=""
-                          className="h-full w-full object-cover"
-                          fallback={<User size={14} className="text-slate-300" />}
-                        />
+            <div className="max-h-[600px] overflow-auto">
+              <Table
+                columns={[
+                  "Student ID",
+                  "Name",
+                  "Class",
+                  "Option",
+                  "Gender",
+                  "Guardian",
+                  "Phone",
+                  "Status",
+                  "",
+                ]}
+              >
+                {filteredStudents.map((s) => (
+                  <tr
+                    key={s.code || s.id}
+                    className="transition-colors hover:bg-[#f1f5f9]/60"
+                  >
+                    <td className="px-4 py-3 font-mono text-xs text-slate-500">
+                      {s.code || s.id}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-[#1e3a8a]">
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#e2e8f0] bg-[#f1f5f9]">
+                          <AuthImage
+                            src={s.photo}
+                            alt=""
+                            className="h-full w-full object-cover"
+                            fallback={
+                              <User size={14} className="text-slate-300" />
+                            }
+                          />
+                        </div>
+                        {s.name}
                       </div>
-                      {s.name}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{s.class}</td>
-                  <td className="px-4 py-3 text-slate-600">
-                    {s.option || "—"}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{s.gender}</td>
-                  <td className="px-4 py-3 text-slate-600">{s.guardian}</td>
-                  <td className="px-4 py-3 text-slate-600">{s.phone || "—"}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone="emerald">{s.status}</Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        aria-label="Edit student"
-                        onClick={() => startEdit(s)}
-                        className={`rounded-md p-1.5 text-slate-400 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${focusRing}`}
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Remove student"
-                        onClick={() => handleDelete(s)}
-                        className={`rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 ${focusRing}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </Table>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{s.class}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {s.option || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{s.gender}</td>
+                    <td className="px-4 py-3 text-slate-600">{s.guardian}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {s.phone || "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone="emerald">{s.status}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label="Edit student"
+                          onClick={() => startEdit(s)}
+                          className={`rounded-md p-1.5 text-slate-400 hover:bg-[#0ea5e9]/10 hover:text-[#0ea5e9] ${focusRing}`}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Remove student"
+                          onClick={() => handleDelete(s)}
+                          className={`rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 ${focusRing}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
           )}
         </Card>
       </div>

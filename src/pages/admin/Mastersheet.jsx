@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, FileSpreadsheet, Printer } from "lucide-react";
-import { Card, CardHeader, PageHeading, Button, Select } from "../../components/ui";
+import {
+  Card,
+  CardHeader,
+  PageHeading,
+  Button,
+  Select,
+} from "../../components/ui";
 import {
   getClasses,
   getMarks,
@@ -17,7 +23,10 @@ import {
   buildStudentRecords,
 } from "../../utils/grading";
 import { getSubjectsForStudent, compareClassNames } from "../../utils/subjects";
-import { exportMastersheetWorkbook, downloadWorkbookBuffer } from "../../utils/mastersheetExport";
+import {
+  exportMastersheetWorkbook,
+  downloadWorkbookBuffer,
+} from "../../utils/mastersheetExport";
 
 const TERMS = Object.keys(termSequences);
 
@@ -50,7 +59,9 @@ export default function Mastersheet() {
       })
       .catch((err) => setError(err.message));
 
-    getTeachers().then(setTeachers).catch((err) => setError(err.message));
+    getTeachers()
+      .then(setTeachers)
+      .catch((err) => setError(err.message));
 
     getSettings()
       .then((s) => {
@@ -84,16 +95,22 @@ export default function Mastersheet() {
       setLoading(true);
       try {
         const subjectNames = Array.from(
-          new Set(students.flatMap((s) => getSubjectsForStudent(s).map((sub) => sub.name))),
+          new Set(
+            students.flatMap((s) =>
+              getSubjectsForStudent(s).map((sub) => sub.name),
+            ),
+          ),
         );
         const results = await Promise.all(
           subjectNames.flatMap((subjectName) =>
             allSequences.map((sequence) =>
-              getMarks(selectedClass, subjectName, sequence, selectedYear).then((marks) => ({
-                subject: subjectName,
-                sequence,
-                marks,
-              })),
+              getMarks(selectedClass, subjectName, sequence, selectedYear).then(
+                (marks) => ({
+                  subject: subjectName,
+                  sequence,
+                  marks,
+                }),
+              ),
             ),
           ),
         );
@@ -126,12 +143,21 @@ export default function Mastersheet() {
         counts.set(sub.name, (counts.get(sub.name) || 0) + 1);
       });
     });
-    return Array.from(counts.keys()).sort((a, b) => counts.get(b) - counts.get(a));
+    return Array.from(counts.keys()).sort(
+      (a, b) => counts.get(b) - counts.get(a),
+    );
   }, [students]);
 
   const records = useMemo(
     () => buildStudentRecords(students, classMarks, term, teachers, settings),
-    [students, classMarks, term, teachers, settings.marksScale, settings.passAverage],
+    [
+      students,
+      classMarks,
+      term,
+      teachers,
+      settings.marksScale,
+      settings.passAverage,
+    ],
   );
 
   const rows = useMemo(
@@ -139,7 +165,7 @@ export default function Mastersheet() {
       records
         .map((r) => ({
           ...r,
-          rank: computePosition(r.student.id, records),
+          rank: computePosition(r.student.code || r.student.id, records),
         }))
         .sort((a, b) => {
           if (a.average == null) return 1;
@@ -245,8 +271,11 @@ export default function Mastersheet() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[240px_1fr]">
         <div className="space-y-6 print:hidden">
           <Card>
-            <CardHeader title="Classes" subtitle="Pick a class to view its mastersheet." />
-            <div className="space-y-2">
+            <CardHeader
+              title="Classes"
+              subtitle="Pick a class to view its mastersheet."
+            />
+            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
               {classes.map((name) => (
                 <button
                   key={name}
@@ -291,7 +320,10 @@ export default function Mastersheet() {
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Term
                   </label>
-                  <Select value={term} onChange={(e) => setTerm(e.target.value)}>
+                  <Select
+                    value={term}
+                    onChange={(e) => setTerm(e.target.value)}
+                  >
                     {TERMS.map((t) => (
                       <option key={t} value={t}>
                         {t}
@@ -302,11 +334,16 @@ export default function Mastersheet() {
               </div>
               <div className="flex gap-6 text-sm text-slate-500">
                 <p>
-                  Students: <span className="font-semibold text-slate-700">{students.length}</span>
+                  Students:{" "}
+                  <span className="font-semibold text-slate-700">
+                    {students.length}
+                  </span>
                 </p>
                 <p>
                   Class Average:{" "}
-                  <span className="font-semibold text-slate-700">{fmt1(classAverage)}</span>
+                  <span className="font-semibold text-slate-700">
+                    {fmt1(classAverage)}
+                  </span>
                 </p>
               </div>
             </div>
@@ -338,7 +375,7 @@ export default function Mastersheet() {
                 <table className="w-full min-w-max border-collapse text-left text-xs">
                   <thead className="bg-[#f1f5f9]">
                     <tr>
-                      <th className="sticky left-0 z-10 border-b border-[#e2e8f0] bg-[#f1f5f9] px-3 py-2 font-semibold uppercase tracking-wide text-slate-500">
+                      <th className="sticky left-0 z-10 w-[110px] min-w-[110px] border-b border-[#e2e8f0] bg-[#f1f5f9] px-3 py-2 font-semibold uppercase tracking-wide text-slate-500">
                         AD Nº
                       </th>
                       <th className="sticky left-[76px] z-10 border-b border-[#e2e8f0] bg-[#f1f5f9] px-3 py-2 font-semibold uppercase tracking-wide text-slate-500">
@@ -388,8 +425,8 @@ export default function Mastersheet() {
                       );
                       return (
                         <tr key={row.student.id} className="hover:bg-[#f8fafc]">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 font-medium text-slate-700">
-                            {row.student.id}
+                          <td className="sticky left-0 z-10 w-[110px] min-w-[110px] bg-white px-3 py-2 font-medium text-slate-700">
+                            {row.student.code || row.student.id}
                           </td>
                           <td className="sticky left-[76px] z-10 bg-white px-3 py-2 font-medium text-slate-700">
                             {row.student.name}
@@ -398,7 +435,10 @@ export default function Mastersheet() {
                             {row.student.gender ? row.student.gender[0] : "—"}
                           </td>
                           {subjectColumns.map((name) => (
-                            <td key={name} className="px-2 py-2 text-center text-slate-600">
+                            <td
+                              key={name}
+                              className="px-2 py-2 text-center text-slate-600"
+                            >
                               {fmt1(subjectMarkFor(row, name))}
                             </td>
                           ))}
@@ -408,7 +448,9 @@ export default function Mastersheet() {
                           <td className="px-2 py-2 text-center font-semibold text-slate-700">
                             {fmt1(row.average)}
                           </td>
-                          <td className="px-2 py-2 text-center text-slate-500">{row.papersSat}</td>
+                          <td className="px-2 py-2 text-center text-slate-500">
+                            {row.papersSat}
+                          </td>
                           <td className="px-2 py-2 text-center text-slate-500">
                             {row.papersPassed}
                           </td>

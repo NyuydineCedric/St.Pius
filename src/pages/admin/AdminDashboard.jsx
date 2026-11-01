@@ -397,7 +397,8 @@ export default function AdminDashboard() {
               Class Performance
             </h3>
             <p className="text-xs text-slate-400">
-              {catLabel(settings.currentSequence) || "Current CAT"} average by class
+              {catLabel(settings.currentSequence) || "Current CAT"} average by
+              class
             </p>
             <div className="mt-4 h-56">
               {loadingAverages ? (

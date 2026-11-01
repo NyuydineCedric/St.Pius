@@ -35,6 +35,14 @@ const GREEN_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FF00B0
 const RED_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFC00000" } };
 const HEADER_ROW_HEIGHT = 80;
 
+// Width of the AD (admission number) column. Codes like "SPXCC-0501" are
+// 10 characters, so this needs a little headroom.
+const AD_WIDTH = 13;
+
+// The number humans see (e.g. SPXCC-0501). Falls back to the internal id for
+// older records that have no code. Display only — never use this as a lookup key.
+const adNumber = (student) => student.code || student.id;
+
 function teacherRemarkTier(mark, scale) {
   if (mark == null) return "-";
   const pct = mark / (Number(scale) || 20);
@@ -98,7 +106,7 @@ function styleDataCell(cell) {
 // TOTAL, AVERAGE, NSS, NSP., Rank.
 function termBlockColumns(subjectColumns) {
   return [
-    { header: "AD", width: 10, rotate: false, identity: true },
+    { header: "AD", width: AD_WIDTH, rotate: false, identity: true },
     { header: "CN", width: 6, rotate: false, identity: true },
     { header: "NAME", width: 26, rotate: false, identity: true },
     { header: "SEX", width: 5, rotate: true, identity: true },
@@ -115,7 +123,7 @@ function termBlockColumns(subjectColumns) {
 
 function identityOnlyColumns(subjectColumns, prefix) {
   return [
-    { header: "AD", width: 10, rotate: false, identity: true },
+    { header: "AD", width: AD_WIDTH, rotate: false, identity: true },
     { header: "CN", width: 6, rotate: false, identity: true },
     { header: "NAME", width: 26, rotate: false, identity: true },
     { header: "SEX", width: 5, rotate: true, identity: true },
@@ -244,7 +252,7 @@ export async function exportMastersheetWorkbook({
     });
     const total = subjectVals.reduce((sum, v) => (v == null ? sum : sum + v), 0);
     return [
-      student.id,
+      adNumber(student),
       "",
       student.name,
       student.gender ? student.gender[0] : "",
@@ -279,7 +287,7 @@ export async function exportMastersheetWorkbook({
     const nsp = subjectVals.filter((v) => v != null && v >= passThreshold).length;
     const rank = computePosition(student.id, mastersheetRecords);
     return [
-      student.id,
+      adNumber(student),
       "",
       student.name,
       student.gender ? student.gender[0] : "",
@@ -297,7 +305,7 @@ export async function exportMastersheetWorkbook({
   // Teacher's Remarks — worded tier per subject, from the mastersheet mark.
   writeLabelColumn("TEACHERS REMARKS", GREEN_FILL);
   writeBlock(identityOnlyColumns(subjectColumns, "R/"), (student) => [
-    student.id,
+    adNumber(student),
     "",
     student.name,
     student.gender ? student.gender[0] : "",
@@ -309,7 +317,7 @@ export async function exportMastersheetWorkbook({
   // Subject Progress — Passed/Failed per subject against the configured pass mark.
   writeLabelColumn("SUBJECT PROGRESS", GREEN_FILL);
   writeBlock(identityOnlyColumns(subjectColumns, "PROG. "), (student) => [
-    student.id,
+    adNumber(student),
     "",
     student.name,
     student.gender ? student.gender[0] : "",
@@ -320,11 +328,11 @@ export async function exportMastersheetWorkbook({
     ),
   ]);
 
-  // Class Council Decision — overall average, pass/fail, worded decision,
-  // and each subject's class-wide rank.
+  // Class Council Decision — overall average, pass/fail/trial, worded
+  // decision, and each subject's class-wide rank.
   writeLabelColumn("CL. C.D.", GREEN_FILL);
   const councilColumns = [
-    { header: "AD", width: 10, rotate: false, identity: true },
+    { header: "AD", width: AD_WIDTH, rotate: false, identity: true },
     { header: "CN", width: 6, rotate: false, identity: true },
     { header: "NAME", width: 26, rotate: false, identity: true },
     { header: "GENDER", width: 6, rotate: true, identity: true },
@@ -337,12 +345,12 @@ export async function exportMastersheetWorkbook({
     const avg = finalAverageByStudent[student.id];
     const pct = avg == null ? null : avg / scale;
     return [
-      student.id,
+      adNumber(student),
       "",
       student.name,
       student.gender ? student.gender[0] : "",
       round1(avg),
-      avg == null ? "-" : statusForScale(avg, scale, passAverage) === "Fail" ? "Failed" : "Passed",
+      avg == null ? "-" : statusForScale(avg, scale, passAverage),
       pct == null ? "-" : classCouncilDecision(pct),
       ...subjectColumns.map((name) => subjectRankByStudent[student.id]?.[name] ?? ""),
     ];

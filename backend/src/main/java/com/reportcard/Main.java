@@ -799,7 +799,8 @@ public class Main {
                 Session caller = sessions.resolve(exchange);
                 if ("admin".equals(role)) {
                     if (hasAdmin && (caller == null || !"admin".equals(caller.role))) {
-                        sendJson(exchange, 403, "{\"error\":\"Admin accounts can only be created by an existing admin\"}");
+                        sendJson(exchange, 403,
+                                "{\"error\":\"Admin accounts can only be created by an existing admin\"}");
                         return;
                     }
                 } else if (!hasAdmin) {
@@ -1352,6 +1353,60 @@ public class Main {
                 }
             }
 
+            if (parts.length == 4 && "PUT".equalsIgnoreCase(method)) {
+                String teacherId = parts[3];
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                Map<String, String> obj = parseJsonObject(body);
+                String name = obj.getOrDefault("name", "").trim();
+                String email = obj.getOrDefault("email", "").trim();
+                String phone = obj.getOrDefault("phone", "").trim();
+                if (name.isEmpty()) {
+                    sendJson(exchange, 400, "{\"error\":\"Name is required\"}");
+                    return;
+                }
+
+                Teacher existing = null;
+                for (Teacher t : store.getTeachers()) {
+                    if (t.id.equals(teacherId)) {
+                        existing = t;
+                        break;
+                    }
+                }
+                if (existing == null) {
+                    sendJson(exchange, 404, "{\"error\":\"Teacher not found\"}");
+                    return;
+                }
+
+                String oldEmail = existing.email;
+                // A blank or placeholder email keeps the current one, so the login
+                // account is never pointed at "—".
+                if (email.isEmpty() || "—".equals(email))
+                    email = oldEmail;
+                if (phone.isEmpty())
+                    phone = existing.phone;
+
+                if (oldEmail == null || !email.equalsIgnoreCase(oldEmail)) {
+                    Teacher otherTeacher = store.findTeacherByEmail(email);
+                    if (store.findUserByEmail(email) != null
+                            || (otherTeacher != null && !otherTeacher.id.equals(teacherId))) {
+                        sendJson(exchange, 409, "{\"error\":\"That email is already in use\"}");
+                        return;
+                    }
+                }
+
+                Teacher updated = store.updateTeacher(teacherId, name, email, phone);
+                if (updated == null) {
+                    sendJson(exchange, 404, "{\"error\":\"Teacher not found\"}");
+                    return;
+                }
+                store.updateTeacherAccount(oldEmail, email, name);
+                invalidateUserCache(oldEmail);
+                invalidateUserCache(email);
+                store.save();
+                sendJson(exchange, 200, updated.toJson());
+                return;
+            }
+
             if (parts.length == 4 && "DELETE".equalsIgnoreCase(method)) {
                 String teacherId = parts[3];
                 // Grab the email before deleting the staff record so we can
@@ -1743,7 +1798,8 @@ public class Main {
     /**
      * POST /api/sync — two-way merge for offline-capable clients.
      *
-     * Request:  {"since": <millis>, "changes": {"students":[…],"teachers":[…],"marks":[…]}}
+     * Request: {"since": <millis>, "changes":
+     * {"students":[…],"teachers":[…],"marks":[…]}}
      * Response: {"serverTime": <millis>, "changes": {…}, "applied": {…}}
      *
      * The client sends what changed locally since its last successful sync and
@@ -2081,7 +2137,8 @@ public class Main {
          * the pupil back. The tombstone is what lets a delete survive a merge.
          */
         Long deletedAt;
-        // Passport-style photo, stored as a data URL (e.g. "data:image/jpeg;base64,...").
+        // Passport-style photo, stored as a data URL (e.g.
+        // "data:image/jpeg;base64,...").
         // Resized/compressed client-side before upload, so this stays small.
         String photo;
         // Date the student was admitted to the school, "yyyy-mm-dd" from a
@@ -2111,7 +2168,8 @@ public class Main {
         String toJson() {
             return String.format(Locale.ROOT,
                     "{\"id\":\"%s\",\"code\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"photo\":\"%s\",\"admittedOn\":\"%s\"}",
-                    escape(id), escape(displayCode()), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
+                    escape(id), escape(displayCode()), escape(name), escape(className), escape(gender),
+                    escape(guardian), escape(phone),
                     escape(dob), escape(option), escape(electives), escape(status), escape(photo), escape(admittedOn));
         }
 
@@ -2148,7 +2206,8 @@ public class Main {
         String toJsonWithoutPhoto() {
             return String.format(Locale.ROOT,
                     "{\"id\":\"%s\",\"code\":\"%s\",\"name\":\"%s\",\"class\":\"%s\",\"gender\":\"%s\",\"guardian\":\"%s\",\"phone\":\"%s\",\"dob\":\"%s\",\"option\":\"%s\",\"electives\":\"%s\",\"status\":\"%s\",\"hasPhoto\":%b,\"admittedOn\":\"%s\"}",
-                    escape(id), escape(displayCode()), escape(name), escape(className), escape(gender), escape(guardian), escape(phone),
+                    escape(id), escape(displayCode()), escape(name), escape(className), escape(gender),
+                    escape(guardian), escape(phone),
                     escape(dob), escape(option), escape(electives), escape(status),
                     photo != null && !photo.isEmpty(), escape(admittedOn));
         }
@@ -2413,7 +2472,9 @@ public class Main {
         /** Pass null or "" for academicYear to read the current year's marks. */
         Map<String, Double> getMarks(String academicYear, String cls, String subject, String sequence);
 
-        /** Every academic year that has recorded marks, plus the current one, sorted. */
+        /**
+         * Every academic year that has recorded marks, plus the current one, sorted.
+         */
         List<String> getAcademicYears();
 
         Teacher addTeacher(String name, String email, String phone);
@@ -2425,6 +2486,11 @@ public class Main {
         void removeAssignment(String teacherId, String className, String subject);
 
         void deleteTeacher(String teacherId);
+
+        Teacher updateTeacher(String id, String name, String email, String phone);
+
+        /** Keeps a teacher's login account in step when their email/name changes. */
+        void updateTeacherAccount(String oldEmail, String newEmail, String newName);
 
         /**
          * Deletes the login account for this email, but only if that
@@ -3085,6 +3151,37 @@ public class Main {
         }
 
         @Override
+        public synchronized Teacher updateTeacher(String id, String name, String email, String phone) {
+            for (Teacher t : teachers) {
+                if (t.id.equals(id)) {
+                    t.name = name;
+                    t.email = email;
+                    t.phone = phone;
+                    t.updatedAt = System.currentTimeMillis();
+                    for (ClassInfo c : classes)
+                        if (id.equals(c.classMasterId))
+                            c.teacher = name;
+                    logActivity("Staff", "Teacher updated — " + name);
+                    return t;
+                }
+            }
+            return null;
+        }
+
+        @Override
+        public synchronized void updateTeacherAccount(String oldEmail, String newEmail, String newName) {
+            if (oldEmail == null)
+                return;
+            for (User u : users) {
+                if (u.email != null && u.email.equalsIgnoreCase(oldEmail) && "teacher".equals(u.role)) {
+                    u.email = newEmail;
+                    u.name = newName;
+                    return;
+                }
+            }
+        }
+
+        @Override
         public synchronized boolean deleteTeacherAccountByEmail(String email) {
             if (email == null || email.isBlank() || "—".equals(email))
                 return false;
@@ -3479,11 +3576,13 @@ public class Main {
                 }
                 String query = uri.getQuery();
                 if (query != null && !query.isBlank()) {
-                    if (params.length() > 0) params.append("&");
+                    if (params.length() > 0)
+                        params.append("&");
                     params.append(query);
                 }
                 if (params.indexOf("sslmode=") == -1) {
-                    if (params.length() > 0) params.append("&");
+                    if (params.length() > 0)
+                        params.append("&");
                     params.append("sslmode=require");
                 }
 
@@ -4010,7 +4109,8 @@ public class Main {
             List<Student> out = new ArrayList<>();
             try (Connection c = connect();
                     Statement st = c.createStatement();
-                    ResultSet rs = st.executeQuery("SELECT * FROM students WHERE deleted_at IS NULL ORDER BY code, id")) {
+                    ResultSet rs = st
+                            .executeQuery("SELECT * FROM students WHERE deleted_at IS NULL ORDER BY code, id")) {
                 while (rs.next())
                     out.add(mapStudent(rs));
             } catch (SQLException e) {
@@ -4356,6 +4456,53 @@ public class Main {
                 }
             } catch (SQLException e) {
                 System.err.println("deleteTeacher failed: " + e.getMessage());
+            }
+        }
+
+        @Override
+        public Teacher updateTeacher(String id, String name, String email, String phone) {
+            try (Connection c = connect()) {
+                int changed;
+                try (PreparedStatement ps = c.prepareStatement(
+                        "UPDATE teachers SET name = ?, email = ?, phone = ?, updated_at = ? WHERE id = ?")) {
+                    ps.setString(1, name);
+                    ps.setString(2, email);
+                    ps.setString(3, phone);
+                    ps.setLong(4, System.currentTimeMillis());
+                    ps.setString(5, id);
+                    changed = ps.executeUpdate();
+                }
+                if (changed == 0)
+                    return null;
+                try (PreparedStatement ps = c.prepareStatement(
+                        "UPDATE classes SET teacher = ? WHERE class_master_id = ?")) {
+                    ps.setString(1, name);
+                    ps.setString(2, id);
+                    ps.executeUpdate();
+                }
+                logActivity("Staff", "Teacher updated — " + name);
+            } catch (SQLException e) {
+                throw new RuntimeException("updateTeacher failed: " + e.getMessage(), e);
+            }
+            for (Teacher t : getTeachers())
+                if (t.id.equals(id))
+                    return t;
+            return null;
+        }
+
+        @Override
+        public void updateTeacherAccount(String oldEmail, String newEmail, String newName) {
+            if (oldEmail == null)
+                return;
+            try (Connection c = connect();
+                    PreparedStatement ps = c.prepareStatement(
+                            "UPDATE users SET email = ?, name = ? WHERE LOWER(email) = LOWER(?) AND role = 'teacher'")) {
+                ps.setString(1, newEmail);
+                ps.setString(2, newName);
+                ps.setString(3, oldEmail);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new RuntimeException("updateTeacherAccount failed: " + e.getMessage(), e);
             }
         }
 

@@ -1,6 +1,12 @@
 import AuthImage from "../../components/AuthImage";
 import { useEffect, useMemo, useState } from "react";
-import { Search, ChevronRight, User, GraduationCap, CalendarDays } from "lucide-react";
+import {
+  Search,
+  ChevronRight,
+  User,
+  GraduationCap,
+  CalendarDays,
+} from "lucide-react";
 import {
   Card,
   CardHeader,
@@ -43,7 +49,9 @@ function StudentCardTile({ student, onOpen }) {
           <p className="truncate text-sm font-bold text-[#1e3a8a]">
             {student.name}
           </p>
-          <p className="font-mono text-xs text-slate-400">{student.code || student.id}</p>
+          <p className="font-mono text-xs text-slate-400">
+            {student.code || student.id}
+          </p>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Badge tone="navy">{student.class}</Badge>
             {student.option && <Badge tone="sky">{student.option}</Badge>}
@@ -149,7 +157,7 @@ export default function StudentCards() {
                 No classes yet.
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
                 {classes.map((name) => (
                   <button
                     key={name}
@@ -201,9 +209,7 @@ export default function StudentCards() {
           {error && <p className="mb-4 text-sm text-rose-500">{error}</p>}
 
           {loading ? (
-            <p className="py-12 text-center text-sm text-slate-400">
-              Loading…
-            </p>
+            <p className="py-12 text-center text-sm text-slate-400">Loading…</p>
           ) : !selectedClass ? (
             <EmptyState
               icon={GraduationCap}
@@ -221,7 +227,7 @@ export default function StudentCards() {
               }
             />
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid max-h-[700px] grid-cols-1 gap-4 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
               {filteredRoster.map((student) => (
                 <StudentCardTile
                   key={student.code || student.id}
