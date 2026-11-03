@@ -33,13 +33,6 @@ export const ELECTIVE_SUBJECTS = [
   s("Food and Nutrition", 5),
 ];
 
-export const ALL_SUBJECTS = [
-  ...GENERAL_SUBJECTS,
-  ...SCIENCE_SUBJECTS,
-  ...ARTS_SUBJECTS,
-  ...ELECTIVE_SUBJECTS,
-];
-
 // ---------------------------------------------------------------------------
 // Form 1 & 2: everyone studies everything
 // ---------------------------------------------------------------------------
@@ -96,6 +89,23 @@ export const SIXTH_FORM_SCIENCE_SUBJECTS = [
   s("Biology", 5),
   s("Sports", 2),
 ];
+
+// Every subject taught anywhere in the school, each name once. Used by the
+// teacher-assignment dropdown in Settings. Must stay BELOW all the lists above.
+export const ALL_SUBJECTS = Array.from(
+  new Map(
+    [
+      ...FORM_1_2_SUBJECTS,
+      ...FORM_3_SUBJECTS,
+      ...GENERAL_SUBJECTS,
+      ...SCIENCE_SUBJECTS,
+      ...ARTS_SUBJECTS,
+      ...ELECTIVE_SUBJECTS,
+      ...SIXTH_FORM_ARTS_SUBJECTS,
+      ...SIXTH_FORM_SCIENCE_SUBJECTS,
+    ].map((subject) => [subject.name, subject]),
+  ).values(),
+);
 
 const MATHEMATICS = SCIENCE_SUBJECTS.find((s) => s.name === "Mathematics");
 const CHEMISTRY = SIXTH_FORM_SCIENCE_SUBJECTS.find((s) => s.name === "Chemistry");
@@ -228,7 +238,7 @@ export function compareClassNames(a, b) {
 //    freely from that stream's pool, up to the 5-subject cap.
 export function getCoreSubjects(className, option) {
   if (!requiresStream(className)) {
-    // CHANGED: Form 3 has its own list; Form 1 and 2 share one.
+    // Form 3 has its own list; Form 1 and 2 share one.
     return getClassLevel(className) === "Form 3"
       ? FORM_3_SUBJECTS
       : FORM_1_2_SUBJECTS;
@@ -255,11 +265,9 @@ export function getCoreSubjects(className, option) {
 // subject is already the compulsory anchor.
 export function getSixthFormElectivePool(option) {
   if (option === "Science") {
-    // CHANGED: uses the sixth-form science list
     return SIXTH_FORM_SCIENCE_SUBJECTS.filter((s) => s.name !== "Chemistry");
   }
   if (option === "Arts") {
-    // CHANGED: uses the sixth-form arts list
     return SIXTH_FORM_ARTS_SUBJECTS.filter((s) => s.name !== "History");
   }
   return [];

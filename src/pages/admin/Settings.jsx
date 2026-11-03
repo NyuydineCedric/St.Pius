@@ -1323,8 +1323,11 @@ export default function Settings() {
                         <div className="font-medium text-[#1e3a8a]">
                           {t.name}
                         </div>
+                        {/* AFTER */}
                         <div className="text-xs text-slate-400">
-                          {t.id} · {t.email} · {t.phone}
+                          {[t.email, t.phone]
+                            .filter((v) => v && v !== "—")
+                            .join(" · ") || "No contact details"}
                         </div>
                       </div>
                     </div>
