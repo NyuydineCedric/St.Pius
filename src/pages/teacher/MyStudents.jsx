@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { getTeachers, getRoster } from "../../utils/api";
+import { getSubjectsForStudent } from "../../utils/subjects";
 import { useSearchParams } from "react-router-dom";
 
 export default function MyStudents() {
@@ -24,9 +25,7 @@ export default function MyStudents() {
 
   const [roster, setRoster] = useState([]);
   const [rosterLoading, setRosterLoading] = useState(false);
-  const [rosterSearch, setRosterSearch] = useState(
-    searchParams.get("q") || "",
-  );
+  const [rosterSearch, setRosterSearch] = useState(searchParams.get("q") || "");
 
   // Step 1: find this teacher's assignments by matching email against the
   // Teacher staff list, then collapse assignments into unique classes.
@@ -88,8 +87,8 @@ export default function MyStudents() {
   }, [selectedClass, myClasses]);
 
   // Step 3: once class (and subject, if needed) are set, fetch the roster.
-  // Note: the roster itself doesn't change by subject — every student in
-  // the class is returned regardless. The subject is just page context.
+  // The server returns the whole class; we narrow it to the students who
+  // actually take the selected subject below (subjectRoster).
   useEffect(() => {
     if (!selectedClass || !selectedSubject) return;
     let cancelled = false;
@@ -112,13 +111,25 @@ export default function MyStudents() {
     };
   }, [selectedClass, selectedSubject]);
 
+  // Only the students who take the selected subject. In Forms 1-3 everyone
+  // takes every subject; in Form 4/5 and the sixth forms this depends on the
+  // student's option and chosen subjects.
+  const subjectRoster = useMemo(() => {
+    if (!selectedSubject) return roster;
+    return roster.filter((student) =>
+      getSubjectsForStudent(student).some(
+        (sub) => sub.name === selectedSubject,
+      ),
+    );
+  }, [roster, selectedSubject]);
+
   const filteredRoster = useMemo(() => {
     const q = rosterSearch.trim().toLowerCase();
-    if (!q) return roster;
-    return roster.filter((s) =>
+    if (!q) return subjectRoster;
+    return subjectRoster.filter((s) =>
       `${s.name} ${s.code || s.id} ${s.gender || ""}`.toLowerCase().includes(q),
     );
-  }, [roster, rosterSearch]);
+  }, [subjectRoster, rosterSearch]);
 
   const goBack = () => {
     if (selectedSubject) {
@@ -229,8 +240,8 @@ export default function MyStudents() {
         <div className="flex items-center gap-2">
           <Users size={18} className="text-[#1e3a8a]" />
           <h2 className="text-lg font-semibold text-[#1e3a8a]">
-            {selectedClass} · {selectedSubject} — {roster.length} student
-            {roster.length !== 1 ? "s" : ""}
+            {selectedClass} · {selectedSubject} — {subjectRoster.length} student
+            {subjectRoster.length !== 1 ? "s" : ""}
           </h2>
         </div>
         <div className="relative">
@@ -252,9 +263,9 @@ export default function MyStudents() {
         <div className="flex h-40 items-center justify-center text-slate-400">
           Loading roster…
         </div>
-      ) : roster.length === 0 ? (
+      ) : subjectRoster.length === 0 ? (
         <div className="rounded-xl border border-[#e2e8f0] bg-white py-12 text-center text-sm text-slate-400">
-          No students enrolled in this class yet.
+          No students in {selectedClass} take {selectedSubject} yet.
         </div>
       ) : filteredRoster.length === 0 ? (
         <div className="rounded-xl border border-[#e2e8f0] bg-white py-12 text-center text-sm text-slate-400">

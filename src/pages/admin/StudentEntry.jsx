@@ -43,7 +43,6 @@ import {
   getCoreSubjects,
   getSixthFormElectivePool,
   ELECTIVE_SUBJECTS,
-  SIXTH_FORM_MAX_SUBJECTS,
 } from "../../utils/subjects";
 import { parseStudentsExcel, downloadTemplate } from "../../utils/excelImport";
 import { fileToCompressedDataUrl } from "../../utils/image";
@@ -125,11 +124,8 @@ export default function StudentEntry() {
   const streamRequired = requiresStream(form.class);
   const sixthForm = isSixthForm(form.class);
 
-  // Sixth form: pick freely from the stream's pool, capped so that
-  // anchor (1) + chosen extras never exceed SIXTH_FORM_MAX_SUBJECTS.
+  // Sixth form: pick freely from the stream's pool (no limit).
   const sixthFormPool = sixthForm ? getSixthFormElectivePool(form.option) : [];
-  const sixthFormMaxExtra = SIXTH_FORM_MAX_SUBJECTS - 1; // slot reserved for the anchor
-  const sixthFormAtLimit = form.electives.length >= sixthFormMaxExtra;
 
   // Form 4/5: fixed core subjects + optional bonus electives, uncapped.
   const coreSubjects =
@@ -146,9 +142,6 @@ export default function StudentEntry() {
       const has = f.electives.includes(name);
       if (has) {
         return { ...f, electives: f.electives.filter((e) => e !== name) };
-      }
-      if (sixthForm && f.electives.length >= sixthFormMaxExtra) {
-        return f; // at the cap, ignore further additions
       }
       return { ...f, electives: [...f.electives, name] };
     });
@@ -583,7 +576,7 @@ export default function StudentEntry() {
                 </>
               )}
 
-              {/* Lower / Upper Sixth: one compulsory anchor + free choice, capped at 5 total */}
+              {/* Lower / Upper Sixth: one compulsory anchor + free choice (no limit) */}
               {sixthForm && form.option && (
                 <>
                   <div className="rounded-lg border border-dashed border-[#e2e8f0] bg-[#f8fafc] p-3 text-xs text-slate-500">
@@ -595,24 +588,19 @@ export default function StudentEntry() {
 
                   <div>
                     <Label>
-                      Choose Subjects ({form.electives.length + 1} /{" "}
-                      {SIXTH_FORM_MAX_SUBJECTS})
+                      Choose Subjects ({form.electives.length + 1} selected)
                     </Label>
                     <div className="flex flex-col gap-1.5 rounded-lg border border-[#e2e8f0] p-3">
                       {sixthFormPool.map((subject) => {
                         const checked = form.electives.includes(subject.name);
-                        const disabled = !checked && sixthFormAtLimit;
                         return (
                           <label
                             key={subject.name}
-                            className={`flex items-center gap-2 text-sm ${
-                              disabled ? "text-slate-300" : "text-slate-600"
-                            }`}
+                            className="flex items-center gap-2 text-sm text-slate-600"
                           >
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={disabled}
                               onChange={() => toggleElective(subject.name)}
                             />
                             {subject.name}
@@ -620,11 +608,6 @@ export default function StudentEntry() {
                         );
                       })}
                     </div>
-                    {sixthFormAtLimit && (
-                      <p className="mt-1 text-xs text-amber-600">
-                        Maximum of {SIXTH_FORM_MAX_SUBJECTS} subjects reached.
-                      </p>
-                    )}
                   </div>
                 </>
               )}

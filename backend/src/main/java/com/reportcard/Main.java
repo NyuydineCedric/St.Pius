@@ -3925,6 +3925,7 @@ public class Main {
 
                     c.commit();
                     Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
+                    s.code = code;
                     s.photo = photo == null ? "" : photo;
                     s.admittedOn = admittedOn == null ? "" : admittedOn;
                     logActivity("Student", "New student enrolled — " + name + " (" + className + ")");
@@ -4017,6 +4018,7 @@ public class Main {
 
                     c.commit();
                     Student s = new Student(id, name, className, gender, guardian, phone, dob, option, electives);
+                    s.code = existing.displayCode();
                     s.status = status;
                     s.photo = photo == null ? "" : photo;
                     s.admittedOn = admittedOn == null ? "" : admittedOn;

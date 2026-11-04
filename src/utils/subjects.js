@@ -26,6 +26,7 @@ export const ARTS_SUBJECTS = [
   s("Economics", 5),
   s("Accounting", 5),
   s("Logic", 5),
+  s("Commerce", 5),
 ];
 
 export const ELECTIVE_SUBJECTS = [
@@ -62,6 +63,7 @@ export const FORM_3_SUBJECTS = [
   s("Accounting", 2),
   s("Logic", 2),
   s("Economics", 2),
+  s("Commerce", 2),
 ];
 
 // ---------------------------------------------------------------------------
@@ -76,6 +78,7 @@ export const SIXTH_FORM_ARTS_SUBJECTS = [
   s("Religious Studies", 5),
   s("Maths Statistics", 5),
   s("ICT", 5),
+  s("Commerce", 5),
   s("Sports", 2),
   s("Manual Labour", 2),
 ];
@@ -138,10 +141,6 @@ export const STREAM_CLASSES = STREAM_LEVELS;
 
 /** Common Cameroon parallel-arm letters schools pick from. */
 export const SECTION_SUGGESTIONS = ["A", "B", "C", "D", "E", "F"];
-
-// Sixth formers pick their own subjects, capped at 5 total (including the
-// one compulsory anchor subject for their stream).
-export const SIXTH_FORM_MAX_SUBJECTS = 5;
 
 /**
  * Normalize a class display name: trim, collapse spaces, glue section letter
@@ -235,7 +234,7 @@ export function compareClassNames(a, b) {
 //    includes it; Arts gets it added on top of its own core).
 //  - Lower/Upper Sixth: only one compulsory anchor subject per stream —
 //    Chemistry for Science, History for Arts. Everything else is chosen
-//    freely from that stream's pool, up to the 5-subject cap.
+//    freely from that stream's pool, with no limit on how many.
 export function getCoreSubjects(className, option) {
   if (!requiresStream(className)) {
     // Form 3 has its own list; Form 1 and 2 share one.
@@ -285,7 +284,7 @@ export function getSubjectsForStudent(student) {
   if (isSixthForm(student.class)) {
     const pool = getSixthFormElectivePool(student.option);
     const chosen = pool.filter((s) => electiveNames.includes(s.name));
-    return [...core, ...chosen].slice(0, SIXTH_FORM_MAX_SUBJECTS);
+    return [...core, ...chosen];
   }
 
   const extra = ELECTIVE_SUBJECTS.filter((s) => electiveNames.includes(s.name));
